@@ -88,25 +88,12 @@ with open("tmp.csv", "w") as fl:
         fl.write(f'{dic["item_name"]},{dic["title"]}\n')
 df = read_df()
 
-bibs_seen = 0
-under_review = 0
-non_papers = 0
+
 bib = ""
-articles = []
 for dic in parsed:
     row = df[df["Bib"] == dic["item_name"]]
     beg = dic["beg"]
     rest = remove_pretitle_tags(dic["rest"])
-    if row.empty:  # my papers only
-        continue
-    bibs_seen += 1
-    venue = row["Venue"].item().lower()
-    if "xiv" in venue or "review" in venue:
-        under_review += 1
-        continue
-    if not row["Paper"].item():
-        non_papers += 1
-        continue
     if not row.empty:
         tags = extract_tags_str(row.squeeze())
         rest = "\n    pretitle={"+tags+"}," + rest
@@ -114,16 +101,12 @@ for dic in parsed:
         if "eshem" in rest and "Xiv" not in rest:
             print(dic["item_name"])
     bib += beg+rest+"\n\n"
-    articles.append(row["bib"])
 bib = bib.replace(r"{'", r"{\'")
-enhanced_path = os.path.join(FILE_DIR, "huji.bib")
+enhanced_path = os.path.join(FILE_DIR, "enhanced.bib")
 with open(enhanced_path, "w") as fl:
     fl.write(bib)
-if bibs_seen != len(df):
-    print(
-        f"Warning, seen {bibs_seen} bibs in bibs, but the manually annotated table contains {len(df)}")
-print(
-    f"skipped {under_review} papers under review and {non_papers} non papers (workshops etc.)")
+
+
 # bib = ""
 # for dic in parsed:
 #     row = df[df["Bib"] == dic["item_name"]]
