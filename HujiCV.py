@@ -1,7 +1,9 @@
+import difflib
 import re
 import pandas as pd
 import numpy as np
 import os
+WZMN = True
 
 FILE_DIR = os.path.dirname(__file__)
 
@@ -44,8 +46,16 @@ def entry_to_bibitem(entry_type, item_name, entry_content):
 
 
 def remove_pretitle_tags(input_string):
-    pattern = r'\s*pretitle=[^}]*},\s*'
+    pattern = r'\s*pretitle\s*=[^}]*},\s*'
     output_string = re.sub(pattern, '', input_string)
+    return output_string
+
+
+def shorten_booktitle(input_string):
+    pattern = r'(\s*booktitle\s*=.*?\d\d\d\d)(.*?)(}\s*,\s*\n)'
+    # pattern = r'(\s*booktitle\s*=.*?)(.*?)(}\s*,\s*\n)'
+    output_string = re.sub(
+        pattern, r'\1\3', input_string, flags=re.DOTALL) + "},"
     return output_string
 
 
@@ -88,33 +98,116 @@ with open("tmp.csv", "w") as fl:
         fl.write(f'{dic["item_name"]},{dic["title"]}\n')
 df = read_df()
 
+
+def simplify_venue(name):
+    return name.split("2")[0].split("-")[0].split("*")[0].split("^")[0].split("(")[0].strip().lower()
+
+
+def simplify_text_for_comparison(txt):
+    return re.sub('[\W_ ]+', '', txt.lower().strip())
+
+
+venue2descripton = {"JML": "impact factor 4.014",
+                    "tacl": """11th out of 145 journals in the "computer science (artificial intelligence)" category, with an impact factor of 10.9""",
+                    "nature": "The top venue in the world under many metrics, with an impact factor of 50.5",
+                    "nature machine intelligence": "Journal with an 18.8 impact factor, higher than the top journals and conferences in Main Machine Learning venues.",
+                    "conll": "11th of 20 in computational linguistics conferences by Google Scholar",
+                    "acl": "1th of 20 in computational linguistics conferences by Google Scholar",
+                    "emnlp": "1th of 20 in computational linguistics conferences by Google Scholar",
+                    "naacl": "1th of 20 in computational linguistics conferences by Google Scholar",
+                    "iclr": "2nd of 20 in Artificial Intelligence conferences by Google Scholar",
+                    "neurips": "1st of 20 in Artificial Intelligence conferences by Google Scholar",
+                    "icml": "3rd of 20 in Artificial Intelligence conferences by Google Scholar",
+                    "aaai": "4th of 20 in Artificial Intelligence conferences by Google Scholar",
+                    "colm": "",
+                    "lrec": "6th of 20 in computational linguistics conferences by Google Scholar",
+                    "coling": "5th of 20 in computational linguistics conferences by Google Scholar",
+                    }
+journals = {"JML", "tacl", "nature", "nature machine intelligence"}
+conferences = set(set(venue2descripton.keys()) - journals)
+venue2descripton = {simplify_venue(
+    key): val for key, val in venue2descripton.items()}
+
+
+print("All venues:" + str([x for x in df["Venue"].apply(simplify_venue).unique()
+      if "xiv" not in x.lower() and "review" not in x.lower()]))
+
+# manually copy pasted from Google Scholar, export ignores the citations...
+citations_path = os.path.join(FILE_DIR, "citations.csv")
+citations = pd.read_csv(citations_path)
+name2cite = {}
+for i, row in citations[citations["Cited by"].notna()].iterrows():
+    title = row["Title"]
+    if title in df["Name"].unique():
+        name2cite[title] = row["Cited by"]
+    else:
+        similar = difflib.get_close_matches(title, df["Name"].unique(), n=1)
+        if similar:
+            similar = similar[0]
+            name2cite[similar] = row["Cited by"]
+            if simplify_text_for_comparison(title) != simplify_text_for_comparison(similar):
+                print(
+                    f"Cited paper wasn't found in the manual list orig,chosen:\n{title}\n {similar}")
+        else:
+            print(
+                f"Cited paper wasn't found in the manual list\n{title}\n and no similar title was found either")
+
 bibs_seen = 0
 under_review = 0
 non_papers = 0
 bib = ""
-articles = []
+journal_bibs = []
+conference_bibs = []
+review_bibs = []
+workshop_bibs = []
+draft_bibs = []
 for dic in parsed:
     row = df[df["Bib"] == dic["item_name"]]
     beg = dic["beg"]
     rest = remove_pretitle_tags(dic["rest"])
     if row.empty:  # my papers only
         continue
+    if WZMN:
+        rest = shorten_booktitle(dic["rest"])
     bibs_seen += 1
     venue = row["Venue"].item().lower()
-    if "xiv" in venue or "review" in venue:
-        under_review += 1
-        continue
+
     if not row["Paper"].item():
         non_papers += 1
-        continue
-    if not row.empty:
+    elif not row.empty:
+        row_bib = row["Bib"].item()
         tags = extract_tags_str(row.squeeze())
         rest = "\n    pretitle={"+tags+"}," + rest
+        rest = "\n    citations={" + \
+            str(name2cite.get(row["Name"].item(), 0)).replace(
+                "*", "").strip()+"}," + rest
+        if "xiv" in venue or "review" in venue:
+            under_review += 1
+        elif row["Workshop-paper"].item() != 1:
+            rest = "\n    venueinf={" + \
+                venue2descripton[simplify_venue(
+                    row["Venue"].item())]+"}," + rest
+
+        # Where to cite
+        if "xiv" in venue or "review" in venue:
+            draft_bibs.append(row_bib)
+        elif row["Review"].item() == 1:
+            review_bibs.append(row_bib)
+        elif row["Workshop-paper"].item() == 1:
+            workshop_bibs.append(row_bib)
+        else:
+            if simplify_venue(venue) in journals:
+                journal_bibs.append(row_bib)
+            elif simplify_venue(venue) in conferences:
+                conference_bibs.append(row_bib)
+            else:
+                raise f"Unknown venue {venue}"
     else:
-        if "eshem" in rest and "Xiv" not in rest:
-            print(dic["item_name"])
+        if "eshem" in rest:
+            print("skipped item for unclear reason", dic["item_name"])
+            raise
     bib += beg+rest+"\n\n"
-    articles.append(row["bib"])
+
 bib = bib.replace(r"{'", r"{\'")
 enhanced_path = os.path.join(FILE_DIR, "huji.bib")
 with open(enhanced_path, "w") as fl:
@@ -139,3 +232,8 @@ print(
 # with open(enhanced_path, "w") as fl:
 #     fl.write(bib)
 print(f"bib exported to {os.path.abspath(enhanced_path)}")
+print("Journals:\n\\nocite{"+",".join(journal_bibs) + "}")
+print("Conferences:\n\\nocite{"+",".join(conference_bibs) + "}")
+print("Reviews:\n\\nocite{"+",".join(review_bibs) + "}")
+print("Workshop Articles:\n\\nocite{"+",".join(workshop_bibs) + "}")
+print("ArXiv Articles:\n\\nocite{"+",".join(draft_bibs) + "}")
