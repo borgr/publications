@@ -21,7 +21,7 @@ def read_df():
     df = df.rename(
         columns={'The Science of Deep Learning': 'The Science of\nDeep Learning'})
     x = "Time of publish ID"
-    df = df.dropna(subset=[x])
+    df = df.dropna(subset=[x, 'Name'])
     df = df.sort_values(x)
     df["Name"] = df["Name"].apply(lambda x: x.strip())
     df["Bib"] = df["Bib"].apply(lambda x: str(x).strip() if x else x)
@@ -52,7 +52,8 @@ def remove_pretitle_tags(input_string):
 def parse_bibtex(bib_string):
     # Regular expression to match BibTeX entries
     entry_pattern = re.compile(
-        r'(@(\w+)\s*\{([^,]+),)(\s*((?:.|\n)*?)\n\})', re.DOTALL)
+        r'(@(\w+)\s*\{([^,]+),)(\s*((?:.|\n)*?)(\n\}|}}\n\s*))', re.DOTALL)
+    # (@(\w+)\s*\{([^,]+),)(\s*((?:.|\n)*?)\n\})
     # re.compile(
     #    r'@(\w+)\s*\{([^,]+),\s*((?:.|\n)*?)\n\}', re.DOTALL)
 
@@ -62,7 +63,7 @@ def parse_bibtex(bib_string):
     results = []
 
     # Find all entries in the BibTeX string
-    for beg, entry_type, item_name, rest, entry_content in entry_pattern.findall(bib_string):
+    for beg, entry_type, item_name, rest, entry_content, _ in entry_pattern.findall(bib_string):
         # Search for the title within the entry content
         title_match = title_pattern.search(entry_content)
         title = title_match.group(1) if title_match else "Title not found"
