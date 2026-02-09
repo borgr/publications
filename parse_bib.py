@@ -122,3 +122,4 @@ if __name__ == "__main__":
     # with open(enhanced_path, "w") as fl:
     #     fl.write(bib)
     print(f"bib exported to {os.path.abspath(enhanced_path)}")
+    print("all papers:\n\\nocite{"+",".join(df["Bib"].unique()) + "}")
