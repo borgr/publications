@@ -5,9 +5,6 @@ import os
 
 FILE_DIR = os.path.dirname(__file__)
 
-with open(os.path.join(FILE_DIR, "orig.bib")) as fl:
-    bib = fl.read()
-
 
 def read_df():
     df = pd.read_excel(
@@ -83,43 +80,45 @@ def parse_bibtex(bib_string):
     return results
 
 
-parsed = parse_bibtex(bib)
-with open("tmp.csv", "w") as fl:
+if __name__ == "__main__":
+    with open(os.path.join(FILE_DIR, "orig.bib")) as fl:
+        bib = fl.read()
+
+    parsed = parse_bibtex(bib)
+    with open("tmp.csv", "w") as fl:
+        for dic in parsed:
+            fl.write(f'{dic["item_name"]},{dic["title"]}\n')
+    df = read_df()
+
+    bib = ""
     for dic in parsed:
-        fl.write(f'{dic["item_name"]},{dic["title"]}\n')
-df = read_df()
+        row = df[df["Bib"] == dic["item_name"]]
+        beg = dic["beg"]
+        rest = remove_pretitle_tags(dic["rest"])
+        if not row.empty:
+            tags = extract_tags_str(row.squeeze())
+            rest = "\n    pretitle={"+tags+"}," + rest
+        else:
+            if "eshem" in rest and "Xiv" not in rest:
+                print(dic["item_name"])
+        bib += beg+rest+"\n\n"
+    bib = bib.replace(r"{'", r"{\'")
+    enhanced_path = os.path.join(FILE_DIR, "enhanced.bib")
+    with open(enhanced_path, "w") as fl:
+        fl.write(bib)
 
-
-bib = ""
-for dic in parsed:
-    row = df[df["Bib"] == dic["item_name"]]
-    beg = dic["beg"]
-    rest = remove_pretitle_tags(dic["rest"])
-    if not row.empty:
-        tags = extract_tags_str(row.squeeze())
-        rest = "\n    pretitle={"+tags+"}," + rest
-    else:
-        if "eshem" in rest and "Xiv" not in rest:
-            print(dic["item_name"])
-    bib += beg+rest+"\n\n"
-bib = bib.replace(r"{'", r"{\'")
-enhanced_path = os.path.join(FILE_DIR, "enhanced.bib")
-with open(enhanced_path, "w") as fl:
-    fl.write(bib)
-
-
-# bib = ""
-# for dic in parsed:
-#     row = df[df["Bib"] == dic["item_name"]]
-#     content = dic["content"]
-#     if not row.empty:
-#         tags = extract_tags_str(row.squeeze())
-#         content = "    pretitle={"+tags+"},\n" + content
-#     else:
-#         if "eshem" in content and "Xiv" not in content:
-#             print(dic["item_name"])
-#     bib += entry_to_bibitem(dic["type"], dic["item_name"], content)
-# enhanced_path = os.path.join(FILE_DIR, "enhanced.bib")
-# with open(enhanced_path, "w") as fl:
-#     fl.write(bib)
-print(f"bib exported to {os.path.abspath(enhanced_path)}")
+    # bib = ""
+    # for dic in parsed:
+    #     row = df[df["Bib"] == dic["item_name"]]
+    #     content = dic["content"]
+    #     if not row.empty:
+    #         tags = extract_tags_str(row.squeeze())
+    #         content = "    pretitle={"+tags+"},\n" + content
+    #     else:
+    #         if "eshem" in content and "Xiv" not in content:
+    #             print(dic["item_name"])
+    #     bib += entry_to_bibitem(dic["type"], dic["item_name"], content)
+    # enhanced_path = os.path.join(FILE_DIR, "enhanced.bib")
+    # with open(enhanced_path, "w") as fl:
+    #     fl.write(bib)
+    print(f"bib exported to {os.path.abspath(enhanced_path)}")
