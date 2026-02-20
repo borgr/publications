@@ -122,4 +122,11 @@ if __name__ == "__main__":
     # with open(enhanced_path, "w") as fl:
     #     fl.write(bib)
     print(f"bib exported to {os.path.abspath(enhanced_path)}")
-    print("all papers:\n\\nocite{"+",".join(df["Bib"].unique()) + "}")
+    # print only Bib entries that are not NaN/empty/placeholder
+    bib_values = []
+    for b in df["Bib"].unique():
+        if pd.notna(b):
+            s = str(b).strip()
+            if s and s.lower() not in ("nan", "none"):
+                bib_values.append(s)
+    print("all papers:\n\\nocite{" + ",".join(bib_values) + "}")
