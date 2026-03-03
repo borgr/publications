@@ -5,7 +5,7 @@ import numpy as np
 import os
 from datetime import datetime, timedelta
 
-from publications.bib_and_excel import read_df
+from augment_bib import read_df
 WZMN = True
 
 FILE_DIR = os.path.dirname(__file__)
@@ -145,6 +145,9 @@ def main():
     citations = load_citations(citations_path)
 
     name2cite = {}
+    # collect title mismatches to report after scanning
+    missing_exact = []       # no close match at all
+    missing_similar = []     # found similar but not identical after normalization
     for i, row in citations[citations["Cited by"].notna()].iterrows():
         title = row["Title"]
         if title in df["Name"].unique():
@@ -156,11 +159,18 @@ def main():
                 similar = similar[0]
                 name2cite[similar] = row["Cited by"]
                 if simplify_text_for_comparison(title) != simplify_text_for_comparison(similar):
-                    print(
-                        f"Cited paper wasn't found in the manual list orig,chosen:\n{title}\n {similar}")
+                    missing_similar.append((title, similar))
             else:
-                print(
-                    f"Cited paper wasn't found in the manual list\n{title}\n and no similar title was found either")
+                missing_exact.append(title)
+    # after loop, print summary lists if any
+    if missing_similar:
+        print("Cited papers with a similar but non-matching title:")
+        for orig, chosen in missing_similar:
+            print(f"  orig: {orig}\n  chosen: {chosen}\n")
+    if missing_exact:
+        print("Cited papers not found in the manual list:")
+        for orig in missing_exact:
+            print(f"  {orig}")
 
     bibs_seen = 0
     under_review = 0
@@ -204,7 +214,7 @@ def main():
             # Where to cite
             if "xiv" in venue or "review" in venue:
                 draft_bibs.append(row_bib)
-            elif row["Review"].item() == 1:
+            elif row["Review, Survey and Position"].item() == 1:
                 review_bibs.append(row_bib)
             elif row["Workshop-paper"].item() == 1:
                 workshop_bibs.append(row_bib)
@@ -246,11 +256,11 @@ def main():
     #     fl.write(bib)
 
     print(f"bib exported to {os.path.abspath(enhanced_path)}")
-    print("Journals:\n\\nocite{"+",".join(journal_bibs) + "}")
-    print("Conferences:\n\\nocite{"+",".join(conference_bibs) + "}")
-    print("Reviews:\n\\nocite{"+",".join(review_bibs) + "}")
-    print("Workshop Articles:\n\\nocite{"+",".join(workshop_bibs) + "}")
-    print("ArXiv Articles:\n\\nocite{"+",".join(draft_bibs) + "}")
+    print("% Journals:\n\\nocite{"+",".join(journal_bibs) + "}")
+    print("% Conferences:\n\\nocite{"+",".join(conference_bibs) + "}")
+    print("% Reviews:\n\\nocite{"+",".join(review_bibs) + "}")
+    print("% Workshop Articles:\n\\nocite{"+",".join(workshop_bibs) + "}")
+    print("% ArXiv Articles:\n\\nocite{"+",".join(draft_bibs) + "}")
 
 
 if __name__ == "__main__":
