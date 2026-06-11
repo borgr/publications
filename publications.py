@@ -112,6 +112,15 @@ def main():
             fl.write(f'{dic["item_name"]},{dic["title"]}\n')
     df = read_df()
 
+    year_from = None  # 2022
+    year_to = None
+    warnings = []
+    if year_from is not None:
+        df = df[df["year"] >= year_from]
+        warnings.append(f"Filtered by year from {year_from}")
+    if year_to is not None:
+        df = df[df["year"] <= year_to]
+        warnings.append(f"Filtered by year to {year_to}")
     venue2descripton = {"jml": "Top Linguistic journal with an impact factor 4.014",
                         "tacl": """11th out of 145 journals in the "computer science (artificial intelligence)" category, with an impact factor of 10.9""",
                         "nature": "The top venue in the world under many metrics, with an impact factor of 50.5",
@@ -239,7 +248,7 @@ def main():
         print(
             f"Warning, seen {bibs_seen} bibs in bibs, but the manually annotated table contains {len(df)}")
     print(
-        f"skipped {under_review} papers under review and {non_papers} non papers (workshops etc.)")
+        f"skipped {under_review} papers under review and {non_papers} non papers (call for papers, patent, etc.)")
     # bib = ""
     # for dic in parsed:
     #     row = df[df["Bib"] == dic["item_name"]]
@@ -261,6 +270,9 @@ def main():
     print("% Reviews:\n\\nocite{"+",".join(review_bibs) + "}")
     print("% Workshop Articles:\n\\nocite{"+",".join(workshop_bibs) + "}")
     print("% ArXiv Articles:\n\\nocite{"+",".join(draft_bibs) + "}")
+    if warnings:
+        print("\n\nWarnings:")
+        print("\n".join(warnings))
 
 
 if __name__ == "__main__":
