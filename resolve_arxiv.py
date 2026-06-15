@@ -340,6 +340,48 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     return "", "not found"
 
 
+# ── In-place bib update ───────────────────────────────────────────────────────
+
+_PUBLISHED_SOURCES = {"DBLP", "ACL Anthology", "OpenReview"}
+
+
+def gen_key(authors: str, year: str, title: str) -> str:
+    """Generate a short bib key from author/year/title, e.g. 'yadav2023ties'."""
+    last = re.sub(r'[^a-z]', '', authors.split(",")[0].strip().split()[-1].lower())
+    skip = {"a", "an", "the", "of", "in", "on", "for", "with", "from", "to", "and", "is", "are"}
+    word = next(
+        (w.lower() for w in re.split(r'\W+', title) if w.lower() not in skip and len(w) > 2),
+        "paper",
+    )
+    word = re.sub(r'[^a-z0-9]', '', word)
+    return f"{last}{year}{word}"
+
+
+def update_bib_inplace(
+    bib_text: str,
+    updates: list,   # list of (key, new_bibtex, source)
+    new_entries: list,  # list of (key, new_bibtex) to append
+) -> tuple:
+    """Apply resolved BibTeX in-place; return (new_bib_text, n_replaced, n_appended)."""
+    n_replaced = 0
+    for key, new_bib, source in updates:
+        if source not in _PUBLISHED_SOURCES:
+            continue
+        pattern = re.compile(
+            r'@\w+\s*\{' + re.escape(key) + r',.*?\n\}',
+            re.DOTALL,
+        )
+        new_text, count = pattern.subn(new_bib.rstrip('\n'), bib_text, count=1)
+        if count:
+            bib_text = new_text
+            n_replaced += 1
+    n_appended = 0
+    for _key, new_bib in new_entries:
+        bib_text = bib_text.rstrip('\n') + '\n\n' + new_bib + '\n'
+        n_appended += 1
+    return bib_text, n_replaced, n_appended
+
+
 # ── Candidate discovery ───────────────────────────────────────────────────────
 
 def get_arxiv_entries(bib_text: str) -> list[dict]:
