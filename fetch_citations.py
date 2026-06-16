@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import parse_qs, urlparse
 
@@ -184,14 +185,21 @@ def scrape_profile(user_id: str, delay: float = 3.0) -> list[dict]:
 
 
 def write_csv(papers: list[dict], output_path: str) -> None:
-    """Write the 3-row-per-paper format used by citations.csv."""
-    with open(output_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["Title", "Cited by", "Year"])
-        for p in papers:
-            writer.writerow([p["title"], p["citations"], p["year"]])
-            writer.writerow([p["authors"], "", ""])
-            writer.writerow([p["venue"], "", ""])
+    """Write the 3-row-per-paper format used by citations.csv (atomic write)."""
+    tmp_path = output_path + ".tmp"
+    try:
+        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Title", "Cited by", "Year"])
+            for p in papers:
+                writer.writerow([p["title"], p["citations"], p["year"]])
+                writer.writerow([p["authors"], "", ""])
+                writer.writerow([p["venue"], "", ""])
+        os.replace(tmp_path, output_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
 
 
 def main() -> None:
@@ -217,6 +225,12 @@ def main() -> None:
 
     papers = scrape_profile(user_id)
     print(f"Found {len(papers)} papers.")
+
+    if not papers:
+        raise RuntimeError(
+            "Fetched 0 papers — Scholar HTML may have changed or the profile is empty. "
+            f"{args.output} was NOT overwritten."
+        )
 
     write_csv(papers, args.output)
     print(f"Saved to {args.output}")

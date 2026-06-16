@@ -15,6 +15,7 @@ Dependencies: beautifulsoup4 (already in requirements.txt), curl
 """
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -118,6 +119,15 @@ def _replace_key(bibtex: str, new_key: str) -> str:
     return re.sub(r'(@\w+\s*\{)\s*[^,\s]+\s*,', rf'\g<1>{new_key},', bibtex, count=1)
 
 
+def _simplify_title(t: str) -> str:
+    return re.sub(r'[\W_]+', '', t.lower())
+
+
+def _dblp_title(bibtex: str) -> str:
+    m = re.search(r'\btitle\s*=\s*[{"]([^}"]+)', bibtex, re.IGNORECASE)
+    return m.group(1) if m else ""
+
+
 def _is_corr(bibtex: str) -> bool:
     compact = bibtex.lower().replace(" ", "").replace("\n", "")
     return (
@@ -145,8 +155,12 @@ def search_dblp(title: str) -> list[str]:
     return [e.strip() for e in entries if e.strip().startswith("@")]
 
 
-def pick_published(bibtex_list: list[str]) -> tuple[str | None, str | None]:
-    """Return (first_published, first_corr) from DBLP results."""
+def pick_published(bibtex_list: list[str], query_title: str = "") -> tuple[str | None, str | None]:
+    """Return (first_published, first_corr) from DBLP results.
+
+    When query_title is given, published entries whose title similarity is below
+    0.72 are skipped — this guards against DBLP returning a different paper.
+    """
     published = corr = None
     for bib in bibtex_list:
         if _is_corr(bib):
@@ -154,6 +168,14 @@ def pick_published(bibtex_list: list[str]) -> tuple[str | None, str | None]:
                 corr = bib
         else:
             if published is None:
+                if query_title:
+                    ratio = difflib.SequenceMatcher(
+                        None,
+                        _simplify_title(query_title),
+                        _simplify_title(_dblp_title(bib)),
+                    ).ratio()
+                    if ratio < 0.72:
+                        continue
                 published = bib
     return published, corr
 
@@ -292,7 +314,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
 
     # Step 1 — DBLP title search
     dblp_results = search_dblp(title)
-    published_bib, corr_bib = pick_published(dblp_results)
+    published_bib, corr_bib = pick_published(dblp_results, query_title=title)
     if published_bib:
         return _replace_key(published_bib, original_key), "DBLP"
     time.sleep(1.0)
@@ -368,7 +390,7 @@ def update_bib_inplace(
         if source not in _PUBLISHED_SOURCES:
             continue
         pattern = re.compile(
-            r'@\w+\s*\{' + re.escape(key) + r',.*?\n\}',
+            r'@\w+\s*\{' + re.escape(key) + r',.*?\r?\n\}',
             re.DOTALL,
         )
         new_text, count = pattern.subn(new_bib.rstrip('\n'), bib_text, count=1)
@@ -377,6 +399,9 @@ def update_bib_inplace(
             n_replaced += 1
     n_appended = 0
     for _key, new_bib in new_entries:
+        if re.search(r'@\w+\s*\{' + re.escape(_key) + r'\s*,', bib_text):
+            print(f"  [skip duplicate] {_key} already in bib", file=sys.stderr)
+            continue
         bib_text = bib_text.rstrip('\n') + '\n\n' + new_bib + '\n'
         n_appended += 1
     return bib_text, n_replaced, n_appended
