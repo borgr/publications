@@ -104,10 +104,22 @@ python update.py --no-push
 python update.py --force
 ```
 
-## Updating for a different author
+## Using this for your own publications
 
-1. **Edit `config.py`** — change `AUTHOR_NAME` and `SCHOLAR_USER_ID`. The pipeline propagates the name into the BST files and `main.tex` automatically on the next run.
-2. **Overleaf project** — update the submodule URL in `.gitmodules` and re-run `git submodule sync`.
+Run the reset script to wipe all personal data and start fresh:
+
+```bash
+# Without your own Overleaf project yet (instructions printed at the end)
+python init_new_author.py
+
+# With your Overleaf git URL (swaps the submodule automatically)
+python init_new_author.py --overleaf-url https://git.overleaf.com/<your-project-id>
+```
+
+Then:
+1. **Edit `config.py`** — set `AUTHOR_NAME` and `SCHOLAR_USER_ID`. The pipeline propagates the name into the BST files and `main.tex` on every run.
+2. **Run `python rebuild_tex.py`** — generates initial `Wzmn.bib` and `main.tex`.
+3. **Run `python update.py`** — fetches from Scholar and pushes to Overleaf.
 
 ## Citation count display
 
