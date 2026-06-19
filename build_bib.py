@@ -2,12 +2,13 @@ import difflib
 import os
 import re
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 import pandas as pd
 
-from augment_bib import read_df, parse_bibtex
+from bib_utils import read_df, parse_bibtex, normalize_text
 
-FILE_DIR = os.path.dirname(__file__)
+FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 RELEVANT_TAGS = {
     r"inter\eval": "\\UND",
@@ -41,6 +42,24 @@ VENUE_DESCRIPTIONS = {
 
 CONFERENCES = set(VENUE_DESCRIPTIONS.keys()) - JOURNALS
 
+_VENUE_SPLIT_RE = re.compile(r'[2\-*^(]')
+
+_CATEGORY_LABELS = {
+    "journals":    "Journals",
+    "conferences": "Conferences",
+    "reviews":     "Reviews",
+    "workshops":   "Workshop Articles",
+    "drafts":      "ArXiv Articles",
+}
+
+
+class BibCategories(NamedTuple):
+    journals: list
+    conferences: list
+    reviews: list
+    workshops: list
+    drafts: list
+
 
 def extract_tags_str(row):
     tags = [RELEVANT_TAGS[col] for col, val in zip(row.index, row)
@@ -56,17 +75,13 @@ def shorten_booktitle(s):
     return re.sub(r'(\s*booktitle\s*=.*?\d{4})(.*?)(}\s*,\s*\n)', r'\1\3', s, flags=re.DOTALL)
 
 
-
 def simplify_venue(name):
     if pd.isna(name) or not name:
         return ""
-    if "conference on cloud computing" in name.lower() and "ieee" in name.lower():
+    s = str(name).lower()
+    if "conference on cloud computing" in s and "ieee" in s:
         return "cloud"
-    return name.split("2")[0].split("-")[0].split("*")[0].split("^")[0].split("(")[0].strip().lower()
-
-
-def simplify_text_for_comparison(txt):
-    return re.sub(r'[\W_ ]+', '', txt.lower().strip())
+    return _VENUE_SPLIT_RE.split(s, maxsplit=1)[0].strip()
 
 
 def load_citations(citations_path):
@@ -93,7 +108,7 @@ def _build_name2cite(citations, df_names):
             if similar:
                 chosen = similar[0]
                 name2cite[chosen] = row["Cited by"]
-                if simplify_text_for_comparison(title) != simplify_text_for_comparison(chosen):
+                if normalize_text(title) != normalize_text(chosen):
                     missing_similar.append((title, chosen))
             else:
                 missing_exact.append(title)
@@ -108,17 +123,28 @@ def _build_name2cite(citations, df_names):
     return name2cite
 
 
-def main():
-    with open(os.path.join(FILE_DIR, "orig.bib")) as f:
-        bib_raw = f.read()
+def _categorize(venue_simple, is_arxiv, is_review, is_workshop):
+    """Return the BibCategories field name for a paper, or None if unknown."""
+    if is_arxiv:
+        return "drafts"
+    if is_review:
+        return "reviews"
+    if is_workshop:
+        return "workshops"
+    if venue_simple in JOURNALS:
+        return "journals"
+    if venue_simple in CONFERENCES:
+        return "conferences"
+    return None
 
-    parsed = parse_bibtex(bib_raw)
-    df = read_df()
-    citations = load_citations(os.path.join(FILE_DIR, "citations.csv"))
-    name2cite = _build_name2cite(citations, set(df["Name"].dropna()))
 
-    bib_out = ""
-    journal_bibs, conference_bibs, review_bibs, workshop_bibs, draft_bibs = [], [], [], [], []
+def _process_entries(parsed, df, name2cite):
+    """Build wzmn.bib text and categorise each paper.
+
+    Returns (bib_out, BibCategories, bibs_seen, under_review_count, non_paper_count).
+    """
+    bib_parts = []
+    cats = {field: [] for field in BibCategories._fields}
     bibs_seen = under_review = non_papers = 0
 
     for dic in parsed:
@@ -136,7 +162,7 @@ def main():
 
         if not row["Paper"].item():
             non_papers += 1
-            bib_out += beg + rest + "\n\n"
+            bib_parts.append(beg + rest)
             continue
 
         row_bib = row["Bib"].item()
@@ -158,28 +184,23 @@ def main():
             elif venue_simple:
                 print(f"Warning: unknown venue {venue_raw!r} (key: {venue_simple!r}) — venueinf omitted")
 
+        category = _categorize(venue_simple, is_arxiv, is_review, is_workshop)
+        if category is None:
+            print(f"Warning: cannot categorize venue {venue_raw!r} for {row_bib!r}, adding to drafts")
+            category = "drafts"
+        cats[category].append(row_bib)
         if is_arxiv:
             under_review += 1
-            draft_bibs.append(row_bib)
-        elif is_review:
-            review_bibs.append(row_bib)
-        elif is_workshop:
-            workshop_bibs.append(row_bib)
-        elif venue_simple in JOURNALS:
-            journal_bibs.append(row_bib)
-        elif venue_simple in CONFERENCES:
-            conference_bibs.append(row_bib)
-        else:
-            print(f"Warning: cannot categorize venue {venue_raw!r} for {row_bib!r}, adding to drafts")
-            draft_bibs.append(row_bib)
 
-        bib_out += beg + rest + "\n\n"
+        bib_parts.append(beg + rest)
 
+    bib_out = "".join(p + "\n\n" for p in bib_parts)
     bib_out = bib_out.replace(r"{'", r"{\\'")
-    enhanced_path = os.path.join(FILE_DIR, "wzmn.bib")
-    with open(enhanced_path, "w") as f:
-        f.write(bib_out)
+    return bib_out, BibCategories(**cats), bibs_seen, under_review, non_papers
 
+
+def _check_coverage(parsed, df, bibs_seen):
+    """Warn about xlsx rows whose bib key is absent from orig.bib."""
     bib_keys_in_orig = {d["item_name"] for d in parsed}
     real_bib = df["Bib"].notna() & ~df["Bib"].str.lower().isin(("nan", "none", ""))
     df_with_bib = df[real_bib]
@@ -191,15 +212,34 @@ def main():
             for _, r in unmatched.iterrows():
                 print(f"    {r['Bib']!r:40s}  {str(r['Name'])[:60]}")
 
+
+def main():
+    with open(os.path.join(FILE_DIR, "orig.bib")) as f:
+        bib_raw = f.read()
+
+    parsed = parse_bibtex(bib_raw)
+    df = read_df()
+    name2cite = _build_name2cite(
+        load_citations(os.path.join(FILE_DIR, "citations.csv")),
+        set(df["Name"].dropna()),
+    )
+
+    bib_out, cats, bibs_seen, under_review, non_papers = _process_entries(parsed, df, name2cite)
+
+    enhanced_path = os.path.join(FILE_DIR, "overleaf", "Wzmn.bib")
+    with open(enhanced_path, "w") as f:
+        f.write(bib_out)
+
+    _check_coverage(parsed, df, bibs_seen)
+
     print(f"Skipped {under_review} under-review and {non_papers} non-papers")
     print(f"Bib exported to {os.path.abspath(enhanced_path)}")
     print("All venues: " + str([x for x in df["Venue"].apply(simplify_venue).unique()
                                   if x and "xiv" not in x and "review" not in x]))
-    print("% Journals:\n\\nocite{" + ",".join(journal_bibs) + "}")
-    print("% Conferences:\n\\nocite{" + ",".join(conference_bibs) + "}")
-    print("% Reviews:\n\\nocite{" + ",".join(review_bibs) + "}")
-    print("% Workshop Articles:\n\\nocite{" + ",".join(workshop_bibs) + "}")
-    print("% ArXiv Articles:\n\\nocite{" + ",".join(draft_bibs) + "}")
+    for field, keys in cats._asdict().items():
+        print(f"% {_CATEGORY_LABELS[field]}:\n\\nocite{{{','.join(keys)}}}")
+
+    return cats
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
-from augment_bib import parse_bibtex, read_df
+from bib_utils import parse_bibtex, read_df
 
 DEFAULT_BIB = os.path.join(FILE_DIR, "orig.bib")
 DEFAULT_OUTPUT = os.path.join(FILE_DIR, "resolved.bib")

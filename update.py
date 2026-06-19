@@ -6,12 +6,14 @@ Steps (each auto-skips if output is already newer than its inputs):
   2. Add new papers (in Scholar, not in xlsx) to Contributions_table.xlsx
   3. Resolve arXiv entries in orig.bib to published BibTeX (in-place);
      also resolve xlsx entries with no Bib key and add them to orig.bib.
-  4. Build wzmn.bib from orig.bib + xlsx metadata (via publications.py)
+  4. Build wzmn.bib from orig.bib + xlsx metadata (via build_bib.py)
+  5. Rebuild example.tex with updated \\nocite{} blocks (via rebuild_tex.py)
+  6. Commit changed files and push to origin (GitHub) and overleaf remotes
 
 Usage:
-    python update.py [--dry-run] [--force]
+    python update.py [--dry-run] [--force] [--no-push]
                      [--skip-fetch] [--skip-xlsx] [--skip-resolve] [--skip-publications]
-                     [--fetch-age HOURS] [--user SCHOLAR_USER_ID]
+                     [--skip-tex] [--fetch-age HOURS] [--user SCHOLAR_USER_ID]
 """
 
 import argparse
@@ -40,7 +42,9 @@ from resolve_arxiv import (
 CITATIONS_CSV = os.path.join(FILE_DIR, "citations.csv")
 XLSX_PATH     = os.path.join(FILE_DIR, "Contributions_table.xlsx")
 BIB_PATH      = os.path.join(FILE_DIR, "orig.bib")
-WZMN_BIB      = os.path.join(FILE_DIR, "wzmn.bib")
+OVERLEAF_DIR  = os.path.join(FILE_DIR, "overleaf")
+WZMN_BIB      = os.path.join(OVERLEAF_DIR, "Wzmn.bib")
+TEX_PATH      = os.path.join(OVERLEAF_DIR, "main.tex")
 
 # xlsx column indices (0-based matching ws.iter_rows)
 COL_ID      = 0   # Time of publish ID
@@ -186,9 +190,9 @@ def step2_add_new_papers(dry_run: bool) -> int:
 
 def _get_xlsx_missing(bib_text: str) -> list:
     """Return xlsx rows with no Bib key (or key absent from bib), with gen_key applied."""
-    from augment_bib import parse_bibtex as _parse_bib
+    from bib_utils import parse_bibtex as _parse_bib
     try:
-        from augment_bib import read_df
+        from bib_utils import read_df
         df = read_df()
     except Exception as exc:
         print(f"  Warning: could not read xlsx: {exc}", file=sys.stderr)
@@ -307,13 +311,84 @@ def step3_resolve(dry_run: bool) -> tuple:
 
 # ── Step 4 ─────────────────────────────────────────────────────────────────────
 
-def step4_build_bib(dry_run: bool) -> None:
+def step4_build_bib(dry_run: bool):
     print("\n[Step 4] Building wzmn.bib")
     if dry_run:
         print("  (dry-run: skipped)")
+        return None
+    import build_bib
+    return build_bib.main()
+
+
+# ── Step 5 ─────────────────────────────────────────────────────────────────────
+
+def step5_rebuild_tex(dry_run: bool, cats) -> None:
+    print("\n[Step 5] Rebuilding example.tex")
+    if dry_run:
+        print("  (dry-run: skipped)")
         return
-    import publications
-    publications.main()
+    import rebuild_tex
+    rebuild_tex.main(cats)
+
+
+# ── Step 6 ─────────────────────────────────────────────────────────────────────
+
+_OUTER_FILES = [
+    "citations.csv",
+    "profile_stats.json",
+    "Contributions_table.xlsx",
+    "orig.bib",
+    "overleaf",  # submodule pointer
+]
+_OVERLEAF_FILES = ["main.tex", "Wzmn.bib"]
+
+
+def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: str) -> bool:
+    """Stage files, commit if changed, push. Returns True on success."""
+    existing = [f for f in files if os.path.exists(os.path.join(repo_dir, f))]
+    subprocess.run(["git", "-C", repo_dir, "add", "--"] + existing, capture_output=True)
+
+    diff = subprocess.run(["git", "-C", repo_dir, "diff", "--cached", "--quiet"], capture_output=True)
+    if diff.returncode == 0:
+        print(f"  [{remote}] Nothing to commit.")
+    else:
+        result = subprocess.run(
+            ["git", "-C", repo_dir, "commit", "-m", message],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            print(f"  [{remote}] Commit failed: {result.stderr.strip()}")
+            return False
+        print(f"  [{remote}] Committed.")
+
+    print(f"  [{remote}] Pushing…", end=" ", flush=True)
+    push = subprocess.run(["git", "-C", repo_dir, "push", remote], capture_output=True, text=True)
+    if push.returncode == 0:
+        print("ok")
+        return True
+    print(f"FAILED\n    {push.stderr.strip()}")
+    return False
+
+
+def step6_push(dry_run: bool) -> None:
+    print("\n[Step 6] Committing and pushing to Overleaf + GitHub")
+    if dry_run:
+        print("  (dry-run: skipped)")
+        return
+
+    # Push submodule (overleaf/) → Overleaf
+    _git_commit_and_push(
+        OVERLEAF_DIR, _OVERLEAF_FILES,
+        "chore: auto-update publications pipeline output",
+        "origin",
+    )
+
+    # Push outer repo (publications/) → GitHub
+    _git_commit_and_push(
+        FILE_DIR, _OUTER_FILES,
+        "chore: auto-update publications pipeline output",
+        "origin",
+    )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -334,6 +409,8 @@ def main() -> None:
     parser.add_argument("--skip-xlsx",         action="store_true", help="Skip step 2")
     parser.add_argument("--skip-resolve",      action="store_true", help="Skip step 3")
     parser.add_argument("--skip-publications", action="store_true", help="Skip step 4")
+    parser.add_argument("--skip-tex",          action="store_true", help="Skip step 5")
+    parser.add_argument("--no-push",           action="store_true", help="Skip step 6 (commit + push)")
     parser.add_argument("--user", default=None,
                         help="Google Scholar user ID (passed to fetch_citations.py)")
     args = parser.parse_args()
@@ -341,6 +418,7 @@ def main() -> None:
     n_added = 0
     n_upgraded = n_appended = n_still_arxiv = 0
     not_found: list = []
+    cats = None
 
     # Step 1 — re-fetch if citations.csv is stale
     csv_age = _age_hours(CITATIONS_CSV)
@@ -374,7 +452,22 @@ def main() -> None:
     elif not args.force and not wzmn_stale:
         print("\n[Step 4] Auto-skipped — wzmn.bib is newer than orig.bib and xlsx.")
     else:
-        step4_build_bib(args.dry_run)
+        cats = step4_build_bib(args.dry_run)
+
+    # Step 5 — rebuild example.tex; auto-skip if it is newer than wzmn.bib
+    tex_stale = _mtime(TEX_PATH) < _mtime(WZMN_BIB)
+    if args.skip_tex:
+        print("\n[Step 5] Skipped.")
+    elif not args.force and not tex_stale:
+        print("\n[Step 5] Auto-skipped — example.tex is newer than wzmn.bib.")
+    else:
+        step5_rebuild_tex(args.dry_run, cats)
+
+    # Step 6 — commit + push to origin and overleaf
+    if args.no_push:
+        print("\n[Step 6] Skipped (--no-push).")
+    else:
+        step6_push(args.dry_run)
 
     print("\n" + "═" * 52)
     print(f"  Step 2: {n_added} new paper(s) added to xlsx")

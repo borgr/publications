@@ -12,6 +12,7 @@ Dependencies: beautifulsoup4  (curl is used for HTTP, no requests library needed
 
 import argparse
 import csv
+import json
 import os
 import shutil
 import subprocess
@@ -147,14 +148,70 @@ def _parse_page(html: str) -> list[dict]:
     return papers
 
 
-def scrape_profile(user_id: str, delay: float = 3.0) -> list[dict]:
-    """Fetch all publications from a Scholar profile, paginating as needed."""
+def _parse_profile_stats(html: str) -> dict | None:
+    """Extract total citations and h-index from the Scholar profile page HTML.
+
+    Returns a dict with keys 'citations', 'h_index', 'i10_index', or None if
+    the stats table is not found (structure may have changed).
+
+    CSS selectors used (stable since ~2015):
+      table#gsc_rsb_st   — the stats summary table
+      td.gsc_rsb_sc1     — row label (Citations / h-index / i10-index)
+      td.gsc_rsb_std     — row values (all-time, last 5 years)
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    table = soup.find("table", id="gsc_rsb_st")
+    if not table:
+        return None
+    key_map = {"citations": "citations", "h-index": "h_index", "i10-index": "i10_index"}
+    stats: dict = {}
+    for row in table.find_all("tr"):
+        label_el = row.find("td", class_="gsc_rsb_sc1")
+        value_els = row.find_all("td", class_="gsc_rsb_std")
+        if not label_el or not value_els:
+            continue
+        label = label_el.get_text(strip=True).lower()
+        key = key_map.get(label)
+        if key is None:
+            continue
+        try:
+            stats[key] = int(value_els[0].get_text(strip=True).replace(",", ""))
+        except ValueError:
+            pass
+    return stats if stats else None
+
+
+def write_stats(stats: dict, path: str) -> None:
+    """Atomically write profile stats to a JSON file."""
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(stats, f, indent=2)
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def scrape_profile(user_id: str, delay: float = 3.0) -> tuple[list[dict], dict | None]:
+    """Fetch all publications and profile stats from a Scholar profile.
+
+    Returns (papers, stats) where stats contains citations, h_index, i10_index.
+    """
     _check_curl()
     all_papers: list[dict] = []
 
-    # Warm-up request: load the bare profile page to populate the cookie jar
-    print("  Loading profile page for cookies…", flush=True)
-    _curl_get(f"https://scholar.google.com/citations?user={user_id}&hl=en")
+    # Warm-up request: loads the profile page for cookies AND profile-level stats
+    print("  Loading profile page…", flush=True)
+    _, profile_html = _curl_get(f"https://scholar.google.com/citations?user={user_id}&hl=en")
+    stats = _parse_profile_stats(profile_html)
+    if stats:
+        print(f"  Profile stats: citations={stats.get('citations')}, "
+              f"h-index={stats.get('h_index')}", flush=True)
+    else:
+        print("  Warning: could not parse profile stats (Scholar HTML may have changed).",
+              flush=True)
     time.sleep(delay)
 
     start = 0
@@ -181,7 +238,7 @@ def scrape_profile(user_id: str, delay: float = 3.0) -> list[dict]:
             file=sys.stderr,
         )
 
-    return all_papers
+    return all_papers, stats
 
 
 def write_csv(papers: list[dict], output_path: str) -> None:
@@ -223,7 +280,7 @@ def main() -> None:
     user_id = _extract_user_id(args.user)
     print(f"Fetching Scholar profile for user: {user_id}")
 
-    papers = scrape_profile(user_id)
+    papers, stats = scrape_profile(user_id)
     print(f"Found {len(papers)} papers.")
 
     if not papers:
@@ -234,6 +291,12 @@ def main() -> None:
 
     write_csv(papers, args.output)
     print(f"Saved to {args.output}")
+
+    if stats:
+        stats_path = os.path.join(os.path.dirname(os.path.abspath(args.output)),
+                                  "profile_stats.json")
+        write_stats(stats, stats_path)
+        print(f"Profile stats saved to {stats_path}")
 
 
 if __name__ == "__main__":

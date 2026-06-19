@@ -1,23 +1,23 @@
 Title,Cited by,Year
-Ties-merging: Resolving interference when merging models,1070,2023
+Ties-merging: Resolving interference when merging models,1075,2023
 "P Yadav, D Tam, L Choshen, CA Raffel, M Bansal",,
 "Advances in neural information processing systems 36, 7093-7115, 2023",,
-Findings of the BabyLM challenge: Sample-efficient pretraining on developmentally plausible corpora,369,2023
+Findings of the BabyLM challenge: Sample-efficient pretraining on developmentally plausible corpora,370,2023
 "A Warstadt, A Mueller, L Choshen, E Wilcox, C Zhuang, J Ciro, ...",,
 "Proceedings of the babylm challenge at the 27th conference on computational …, 2023",,
-Active learning for BERT: an empirical study,321,2020
+Active learning for BERT: an empirical study,322,2020
 "LE Dor, A Halfon, A Gera, E Shnarch, L Dankin, L Choshen, M Danilevsky, ...",,
 "Proceedings of the 2020 conference on empirical methods in natural language …, 2020",,
-An autonomous debating system,317,2021
+An autonomous debating system,319,2021
 "N Slonim, Y Bilu, C Alzate, R Bar-Haim, B Bogin, F Bonin, L Choshen, ...",,
 "Nature 591 (7850), 379-384, 2021",,
-Q2: Evaluating factual consistency in knowledge-grounded dialogues via question generation and question answering,255,2021
+Q2: Evaluating factual consistency in knowledge-grounded dialogues via question generation and question answering,252,2021
 "O Honovich, L Choshen, R Aharoni, E Neeman, I Szpektor, O Abend",,
 "Proceedings of the 2021 Conference on Empirical Methods in Natural Language …, 2021",,
-Global mmlu: Understanding and addressing cultural and linguistic biases in multilingual evaluation,230,2025
+Global mmlu: Understanding and addressing cultural and linguistic biases in multilingual evaluation,233,2025
 "S Singh, A Romanou, C Fourrier, DI Adelani, JG Ngui, D Vila-Suero, ...",,
 "Proceedings of the 63rd Annual Meeting of the Association for Computational …, 2025",,
-tinyBenchmarks: evaluating LLMs with fewer examples,146,2024
+tinyBenchmarks: evaluating LLMs with fewer examples,147,2024
 "FM Polo, L Weber, L Choshen, Y Sun, G Xu, M Yurochkin",,
 "arXiv preprint arXiv:2402.14992, 2024",,
 Fusing finetuned models for better pretraining,122,2022
@@ -26,22 +26,22 @@ Fusing finetuned models for better pretraining,122,2022
 Disentqa: Disentangling parametric and contextual knowledge with counterfactual question answering,116,2023
 "E Neeman, R Aharoni, O Honovich, L Choshen, I Szpektor, O Abend",,
 "Proceedings of the 61st Annual Meeting of the Association for Computational …, 2023",,
-On the weaknesses of reinforcement learning for neural machine translation,115,2019
+On the weaknesses of reinforcement learning for neural machine translation,116,2019
 "L Choshen, L Fox, Z Aizenbud, O Abend",,
 "arXiv preprint arXiv:1907.01752, 2019",,
-Are you convinced? choosing the more convincing evidence with a Siamese network,113,2019
+Are you convinced? choosing the more convincing evidence with a Siamese network,114,2019
 "M Gleize, E Shnarch, L Choshen, L Dankin, G Moshkowich, R Aharonov, ...",,
 "Proceedings of the 57th Annual Meeting of the Association for Computational …, 2019",,
 Findings of the second BabyLM challenge: Sample-efficient pretraining on developmentally plausible corpora,107,2024
 "MY Hu, A Mueller, C Ross, A Williams, T Linzen, C Zhuang, R Cotterell, ...",,
 "The 2nd BabyLM Challenge at the 28th Conference on Computational Natural …, 2024",,
-Asymmetry in low-rank adapters of foundation models,105,2024
+Asymmetry in low-rank adapters of foundation models,106,2024
 "J Zhu, K Greenewald, K Nadjahi, HSDO Borde, RB Gabrielsson, ...",,
 "arXiv preprint arXiv:2402.16842, 2024",,
 Will it blend? blending weak and strong labeled data in a neural network for argumentation mining,98,2018
 "E Shnarch, C Alzate, L Dankin, M Gleize, Y Hou, L Choshen, R Aharonov, ...",,
 "Proceedings of the 56th Annual Meeting of the Association for Computational …, 2018",,
-Model merging with svd to tie the knots,95,2025
+Model merging with svd to tie the knots,93,2025
 "G Stoica, P Ramesh, B Ecsedi, L Choshen, J Hoffman",,
 "International Conference on Learning Representations 2025, 4501-4519, 2025",,
 Corpus wide argument mining—a working solution,93,2020
@@ -50,12 +50,12 @@ Corpus wide argument mining—a working solution,93,2020
 Jump to Conclusions: Short-Cutting Transformers With Linear Transformations,92,2023
 "A Yom Din, T Karidi, L Choshen, M Geva",,
 "arXiv e-prints, arXiv: 2303.09435, 2023",,
+Efficient benchmarking (of language models),87,2024
+"Y Perlitz, E Bandel, A Gera, O Arviv, LE Dor, E Shnarch, N Slonim, ...",,
+"Proceedings of the 2024 Conference of the North American Chapter of the …, 2024",,
 Dora the explorer: Directed outreaching reinforcement action-selection,86,2018
 "L Choshen, L Fox, Y Loewenstein",,
 "arXiv preprint arXiv:1804.04012, 2018",,
-Efficient benchmarking (of language models),85,2024
-"Y Perlitz, E Bandel, A Gera, O Arviv, LE Dor, E Shnarch, N Slonim, ...",,
-"Proceedings of the 2024 Conference of the North American Chapter of the …, 2024",,
 Efficient multi-prompt evaluation of llms,81,2024
 "FM Polo, R Xu, L Weber, M Silva, O Bhardwaj, L Choshen, AF de Oliveira, ...",,
 "Advances in Neural Information Processing Systems 37, 22483-22512, 2024",,
@@ -65,7 +65,7 @@ Cold fusion: Collaborative descent for distributed multitask finetuning,79,2023
 Let’s agree to agree: Neural networks share classification order on real datasets,76,2020
 "G Hacohen, L Choshen, D Weinshall",,
 "International Conference on Machine Learning, 3950-3960, 2020",,
-Beyond binary rewards: Training lms to reason about their uncertainty,73,2025
+Beyond binary rewards: Training lms to reason about their uncertainty,74,2025
 "M Damani, I Puri, S Slocum, I Shenfeld, L Choshen, Y Kim, J Andreas",,
 "arXiv preprint arXiv:2507.16806, 2025",,
 Knowledge is a region in weight space for fine-tuned language models,71,2023
@@ -77,22 +77,22 @@ A survey on model moerging: Recycling and routing among specialized experts for 
 The grammar-learning trajectories of neural language models,67,2022
 "L Choshen, G Hacohen, D Weinshall, O Abend",,
 "Proceedings of the 60th Annual Meeting of the Association for Computational …, 2022",,
-Findings of the third BabyLM challenge: Accelerating language modeling research with cognitively plausible data,51,2025
+Findings of the third BabyLM challenge: Accelerating language modeling research with cognitively plausible data,52,2025
 "LGG Charpentier, L Choshen, R Cotterell, MO Gul, MY Hu, J Liu, ...",,
 "Proceedings of the First BabyLM Workshop, 399-420, 2025",,
+Textarena,50,2025
+"L Guertler, B Cheng, S Yu, B Liu, L Choshen, C Tan",,
+"arXiv preprint arXiv:2504.11442, 2025",,
 Numerologic: Number encoding for enhanced llms’ numerical reasoning,50,2024
 "E Schwartz, L Choshen, J Shtok, S Doveh, L Karlinsky, A Arbelle",,
 "Proceedings of the 2024 Conference on Empirical Methods in Natural Language …, 2024",,
 Genie: Achieving human parity in content-grounded datasets generation,50,2024
 "A Yehudai, B Carmeli, Y Mass, O Arviv, N Mills, A Toledo, E Shnarch, ...",,
 "arXiv preprint arXiv:2401.14367, 2024",,
-Textarena,48,2025
-"L Guertler, B Cheng, S Yu, B Liu, L Choshen, C Tan",,
-"arXiv preprint arXiv:2504.11442, 2025",,
 Holmes⌕ A Benchmark to Assess the Linguistic Competence of Language Models,48,2024
 "A Waldis, Y Perlitz, L Choshen, Y Hou, I Gurevych",,
 "Transactions of the Association for Computational Linguistics 12, 1616-1647, 2024",,
-Bigger is not always better: The importance of human-scale language modeling for psycholinguistics,46,2025
+Bigger is not always better: The importance of human-scale language modeling for psycholinguistics,47,2025
 "EG Wilcox, MY Hu, A Mueller, A Warstadt, L Choshen, C Zhuang, ...",,
 "Journal of Memory and Language 144, 104650, 2025",,
 SemEval-2019 task 1: Cross-lingual semantic parsing with UCCA,45,2019
@@ -101,12 +101,12 @@ SemEval-2019 task 1: Cross-lingual semantic parsing with UCCA,45,2019
 Inherent Biases in Reference based Evaluation for Grammatical Error Correction and Text Simplification,44,2018
 "L Choshen, O Abend",,
 "Proceedings of the 56th Annual Meeting of the Association for Computational …, 2018",,
+Zipnn: Lossless compression for ai models,43,2025
+"M Hershcovitch, A Wood, L Choshen, G Girmonsky, R Leibovitz, O Ozeri, ...",,
+"2025 IEEE 18th International Conference on Cloud Computing (CLOUD), 186-198, 2025",,
 Learning to combine grammatical error corrections,43,2019
 "Y Kantor, Y Katz, L Choshen, E Cohen-Karlik, N Liberman, A Toledo, ...",,
 "Proceedings of the Fourteenth Workshop on Innovative Use of NLP for Building …, 2019",,
-Zipnn: Lossless compression for ai models,42,2025
-"M Hershcovitch, A Wood, L Choshen, G Girmonsky, R Leibovitz, O Ozeri, ...",,
-"2025 IEEE 18th International Conference on Cloud Computing (CLOUD), 186-198, 2025",,
 The language of legal and illegal activity on the Darknet,42,2019
 "L Choshen, D Eldad, D Hershcovich, E Sulem, O Abend",,
 "Proceedings of the 57th Annual Meeting of the Association for Computational …, 2019",,
@@ -143,15 +143,15 @@ Compress then serve: Serving thousands of lora adapters with little overhead,26,
 Label sleuth: From unlabeled text to a classifier in a few hours,26,2022
 "E Shnarch, A Halfon, A Gera, M Danilevsky, Y Katsis, L Choshen, ...",,
 "Proceedings of the 2022 Conference on Empirical Methods in Natural Language …, 2022",,
+A Hitchhiker's Guide to Scaling Law Estimation,25,2024
+"L Choshen, Y Zhang, J Andreas",,
+"arXiv preprint arXiv:2410.11840, 2024",,
+"Unitxt: Flexible, shareable and reusable data preparation and evaluation for generative ai",25,2024
+"E Bandel, Y Perlitz, E Venezian, R Friedman, O Arviv, M Orbach, ...",,
+"Proceedings of the 2024 Conference of the North American Chapter of the …, 2024",,
 Human learning by model feedback: The dynamics of iterative prompting with midjourney,25,2023
 "S Don-Yehiya, L Choshen, O Abend",,
 "Proceedings of the 2023 Conference on Empirical Methods in Natural Language …, 2023",,
-A Hitchhiker's Guide to Scaling Law Estimation,24,2024
-"L Choshen, Y Zhang, J Andreas",,
-"arXiv preprint arXiv:2410.11840, 2024",,
-"Unitxt: Flexible, shareable and reusable data preparation and evaluation for generative ai",24,2024
-"E Bandel, Y Perlitz, E Venezian, R Friedman, O Arviv, M Orbach, ...",,
-"Proceedings of the 2024 Conference of the North American Chapter of the …, 2024",,
 Automatically extracting challenge sets for non-local phenomena in neural machine translation,24,2019
 "L Choshen, O Abend",,
 "Proceedings of the 23rd Conference on Computational Natural Language …, 2019",,
@@ -170,18 +170,21 @@ Elements of World Knowledge (EWoK): A Cognition-Inspired Framework for Evaluatin
 Llm merging: Building llms efficiently through merging,19,2024
 "D Tam, M Li, P Yadav, RB Gabrielsson, J Zhu, K Greenewald, ...",,
 "NeurIPS 2024 Competition Track, 2024",,
+Dove: A large-scale multi-dimensional predictions dataset towards meaningful llm evaluation,17,2025
+"E Habba, O Arviv, I Itzhak, Y Perlitz, E Bandel, L Choshen, ...",,
+"arXiv preprint arXiv:2503.01622, 2025",,
 PreQuEL: Quality estimation of machine translation outputs in advance,17,2022
 "S Don-Yehiya, L Choshen, O Abend",,
 "Proceedings of the 2022 Conference on Empirical Methods in Natural Language …, 2022",,
-Dove: A large-scale multi-dimensional predictions dataset towards meaningful llm evaluation,16,2025
-"E Habba, O Arviv, I Itzhak, Y Perlitz, E Bandel, L Choshen, ...",,
-"arXiv preprint arXiv:2503.01622, 2025",,
 Semantics-aware attention improves neural machine translation,15,2022
 "A Slobodkin, L Choshen, O Abend",,
 "Proceedings of the 11th Joint Conference on Lexical and Computational …, 2022",,
 Unsupervised expressive rules provide explainability and assist human experts grasping new domains,15,2020
 "E Shnarch, L Choshen, G Moshkowich, R Aharonov, N Slonim",,
 "Findings of the Association for Computational Linguistics: EMNLP 2020, 2678-2697, 2020",,
+Global piqa: Evaluating physical commonsense reasoning across 100+ languages and cultures,14,2025
+"TA Chang, C Arnett, A Eldesokey, A Sadallah, A Kashar, A Daud, ...",,
+"arXiv preprint arXiv:2510.24081, 2025",,
 The future of open human feedback,14,2025
 "S Don-Yehiya, B Burtenshaw, R Fernandez Astudillo, C Osborne, ...",,
 "Nature Machine Intelligence 7 (6), 825-835, 2025",,
@@ -191,21 +194,18 @@ The mighty torr: A benchmark for table reasoning and robustness,14,2025
 Label-efficient model selection for text generation,14,2024
 "SA Tahan, A Gera, B Sznajder, L Choshen, LE Dor, E Shnarch",,
 "Proceedings of the 62nd Annual Meeting of the Association for Computational …, 2024",,
-Global piqa: Evaluating physical commonsense reasoning across 100+ languages and cultures,13,2025
-"TA Chang, C Arnett, A Eldesokey, A Sadallah, A Kashar, A Daud, ...",,
-"arXiv preprint arXiv:2510.24081, 2025",,
 Reinforcement learning with large action spaces for neural machine translation,13,2022
 "A Yehudai, L Choshen, L Fox, O Abend",,
 "Proceedings of the 29th International Conference on Computational …, 2022",,
 Mediators in determining what processing BERT performs first,13,2021
 "A Slobodkin, L Choshen, O Abend",,
 "Proceedings of the 2021 Conference of the North American Chapter of the …, 2021",,
+General agent evaluation,12,2026
+"E Bandel, A Yehudai, L Eden, Y Sagron, Y Perlitz, E Venezian, ...",,
+"arXiv preprint arXiv:2602.22953, 2026",,
 Livexiv-a multi-modal live benchmark based on arxiv papers content,12,2025
 "N Shabtay, F Maia Polo, S Doveh, W Lin, MJ Mirza, L Choshen, ...",,
 "International Conference on Learning Representations 2025, 11470-11502, 2025",,
-General agent evaluation,11,2026
-"E Bandel, A Yehudai, L Eden, Y Sagron, Y Perlitz, E Venezian, ...",,
-"arXiv preprint arXiv:2602.22953, 2026",,
 The ShareLM collection and plugin: contributing human-model chats for the benefit of the community,11,2025
 "S Don-Yehiya, L Choshen, O Abend",,
 "Proceedings of the 63rd Annual Meeting of the Association for Computational …, 2025",,
@@ -221,12 +221,12 @@ Beneath the surface of consistency: Exploring cross-lingual knowledge representa
 GrASP: A library for extracting and exploring human-interpretable textual patterns,10,2022
 "P Lertvittayakumjorn, L Choshen, E Shnarch, F Toni",,
 "Proceedings of the Thirteenth Language Resources and Evaluation Conference …, 2022",,
+Neurips 2023 llm efficiency fine-tuning competition,9,2025
+"M Saroufim, Y Perlitz, L Choshen, L Antiga, G Bowyer, C Puhrsch, ...",,
+"arXiv preprint arXiv:2503.13507, 2025",,
 Babybabellm: A multilingual benchmark of developmentally plausible training data,8,2026
 "J Jumelet, A Fourtassi, A Haga, B Bunzeck, B Shandilya, D Galvan-Sosa, ...",,
 "Proceedings of the 19th Conference of the European Chapter of the …, 2026",,
-Neurips 2023 llm efficiency fine-tuning competition,8,2025
-"M Saroufim, Y Perlitz, L Choshen, L Antiga, G Bowyer, C Puhrsch, ...",,
-"arXiv preprint arXiv:2503.13507, 2025",,
 Navigating the modern evaluation landscape: Considerations in benchmarks and frameworks for large language models (LLMs),7,2024
 "L Choshen, A Gera, Y Perlitz, M Shmueli-Scheuer, G Stanovsky",,
 "Proceedings of the 2024 Joint International Conference on Computational …, 2024",,
@@ -239,18 +239,24 @@ Comsum: Commit messages summarization and meaning preservation,7,2021
 Pretraining language models for diachronic linguistic change discovery,6,2026
 "E Fittschen, SX Li, T Lippincott, L Choshen, C Messner",,
 "Findings of the Association for Computational Linguistics: EACL 2026, 4627-4642, 2026",,
+Position: Agentic systems should be general,5,2026
+"E Bandel, A Yehudai, A Lacoste, A Ghosh, G Neubig, M Mitchell, ...",,
+,,
 Unforgettable generalization in language models,5,2024
 "E Zhang, L Chosen, J Andreas",,
 "arXiv preprint arXiv:2409.02228, 2024",,
-Position: Agentic systems should be general,4,2026
-"E Bandel, A Yehudai, A Lacoste, A Ghosh, G Neubig, M Mitchell, ...",,
-,,
 CUBE: A Standard for Unifying Agent Benchmarks,3,2026
 "A Lacoste, N Gontier, O Shliazhko, A Jaiswal, K Sareen, S Nanisetty, ...",,
 "arXiv preprint arXiv:2603.15798, 2026",,
 ErrorMap and ErrorAtlas: Charting the Failure Landscape of Large Language Models,3,2026
 "S Ashury-Tahan, Y Mai, E Bandel, M Shmueli-Scheuer, L Choshen",,
 "arXiv preprint arXiv:2601.15812, 2026",,
+Every eval ever: Toward a common language for ai eval reporting,3,2026
+"J Batzner, L Choshen, A Ghosh, SH Nelaturu, A Kornilova, D Stachura, ...",,
+"Blog Post, EvalEval Coalition, 2026",,
+Growing Pains: Extensible and Efficient LLM Benchmarking Via Fixed Parameter Calibration,2,2026
+"E Habba, I Itzhak, A Yehudai, Y Perlitz, E Bandel, M Shmueli-Scheuer, ...",,
+"arXiv preprint arXiv:2604.12843, 2026",,
 Do LLMs Benefit From Their Own Words?,2,2026
 "JY Huang, L Choshen, R Astudillo, T Broderick, J Andreas",,
 "arXiv preprint arXiv:2602.24287, 2026",,
@@ -260,9 +266,6 @@ BabyLM Turns 4 and Goes Multilingual: Call for Papers for the 2026 BabyLM Worksh
 Will it Merge? On The Causes of Model Mergeability,2,2026
 "A Rahamim, A Yehudai, B Carmeli, L Choshen, Y Mass, Y Belinkov",,
 "arXiv preprint arXiv:2601.06672, 2026",,
-Every eval ever: Toward a common language for ai eval reporting,2,2026
-"J Batzner, L Choshen, A Ghosh, SH Nelaturu, A Kornilova, D Stachura, ...",,
-"Blog Post, EvalEval Coalition, 2026",,
 Inter-training of pre-trained transformer-based language models using partitioning and classification,2,2024
 "E Shnarch, G Ariel, A Halfon, L Dankin, L CHOSHEN, R Aharonov, ...",,
 "US Patent 12,093,645, 2024",,
@@ -278,9 +281,6 @@ Part of speech and universal dependency effects on english arabic machine transl
 LLM Hypnosis: Characterizing the Fragility of RLHF Against Unprivileged Knowledge Injection,2,
 "A Hilel, R Bhagwat, L Choshen, I Shenfeld, J Andreas",,
 ,,
-Growing Pains: Extensible and Efficient LLM Benchmarking Via Fixed Parameter Calibration,1,2026
-"E Habba, I Itzhak, A Yehudai, Y Perlitz, E Bandel, M Shmueli-Scheuer, ...",,
-"arXiv preprint arXiv:2604.12843, 2026",,
 Robustness as an Emergent Property of Task Performance,1,2026
 "S Ashury-Tahan, A Gera, E Bandel, M Shmueli-Scheuer, L Choshen",,
 "arXiv preprint arXiv:2602.03344, 2026",,
@@ -290,6 +290,12 @@ A Latent Variable Framework for Scaling Laws in Large Language Models,1,2025
 How Safe is Your Safety Metric? Automatic Concatenation Tests for Metric Reliability,1,2024
 "ON Fandina, L Choshen, E Farchi, G Kour, Y Perlitz, O Raz",,
 "arXiv preprint arXiv:2408.12259, 2024",,
+A Statistical Framework for Game-Based AI Evaluation,1,
+"FM Polo, L Choshen, Y Sun, K Greenewald",,
+"NeurIPS 2025 Workshop on Evaluating the Evolving LLM Lifecycle: Benchmarks …, 0",,
+Every Eval Ever: A Unifying Schema and Community Repository for AI Evaluation Results,,2026
+"J Batzner, SH Nelaturu, A Kornilova, J Crall, T Cerruti, Y Long, Y Mai, ...",,
+"arXiv preprint arXiv:2606.14516, 2026",,
 Evaluation Cards: An Interpretive Layer for AI Evaluation Reporting,,2026
 "A Ghosh, A Reuel, J Chim, WM Kennedy, S Yadav, J Mickel, Y Long, ...",,
 "arXiv preprint arXiv:2606.09809, 2026",,
@@ -326,9 +332,6 @@ MuLER: Detailed and Scalable Reference-based Evaluation,,2023
 "Some Grammatical Errors are Frequent, Others are Important",,2022
 "L Choshen, O Shifman, O Abend",,
 "arXiv preprint arXiv:2205.05730, 2022",,
-A Statistical Framework for Game-Based AI Evaluation,,
-"FM Polo, L Choshen, Y Sun, K Greenewald",,
-"NeurIPS 2025 Workshop on Evaluating the Evolving LLM Lifecycle: Benchmarks …, 0",,
 Stop Guessing When to Stop Testing: Efficient Model Evaluation with Just Enough Data,,
 "O Arviv, K Greenewald, Y Perlitz, H Mulian, M Shmueli-Scheuer, ...",,
 ,,

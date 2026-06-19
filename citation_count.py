@@ -1,7 +1,5 @@
 #!/usr/bin/python
 
-import sys
-import re
 from scholarly import scholarly
 
 # from scholarly import ProxyGenerator
@@ -17,24 +15,6 @@ def main(author=AUTHOR):
     """Ignores the per publication citations, and only updates the total line."""
     total_line, pubs = get_all_citations(author)
     return total_line, pubs
-    # print(pubs)
-
-    with open(papers_file) as papers_list, open(ofile, 'w') as ofh:
-        for l in papers_list:
-            if l.startswith('Total Citations: '):
-                l = total_line
-            else:
-                m = re.search('\\\\gsurl\{([^\}]+)\}', l)
-
-                if m:
-                    id = m.group(1)
-
-                    n = pubs[id]
-                    l = re.sub('\\\\citations{\d+}', '\\\\citations{'+n+'}', l)
-
-            ofh.write(l)
-
-    return 0
 
 
 def get_all_citations(author):
@@ -60,7 +40,6 @@ def get_all_citations(author):
 
     for p in author['publications']:
         # print(p)
-        title = p['bib']
         id = p['author_pub_id']
         n = p['num_citations']
 #        print(title, "\\\\gsurl{"+id+"}")

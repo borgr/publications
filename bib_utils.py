@@ -2,7 +2,7 @@ import re
 import pandas as pd
 import os
 
-FILE_DIR = os.path.dirname(__file__)
+FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def read_df():
@@ -36,3 +36,8 @@ def parse_bibtex(bib_string):
             "rest": rest,
         })
     return results
+
+
+def normalize_text(txt):
+    """Strip all non-alphanumeric characters for fuzzy title comparison."""
+    return re.sub(r'[\W_]+', '', txt.lower().strip())
