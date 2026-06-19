@@ -21,7 +21,25 @@ update.py (orchestrates all steps)
       └─ Step 6: git push → GitHub + Overleaf
 ```
 
-Running `python update.py` from this directory does everything end-to-end.
+Running `python update.py` from this directory does everything end-to-end.  
+To only regenerate the bib and tex without fetching from Scholar, run `python rebuild_tex.py` directly.
+
+## Installation
+
+```bash
+# 1. Clone the repo including the Overleaf submodule
+git clone --recurse-submodules https://github.com/borgr/publications.git
+cd publications
+
+# If you already cloned without --recurse-submodules:
+git submodule update --init
+
+# 2. Install Python dependencies
+pip install -r requirements.txt
+```
+
+`curl` must be available in your PATH (used for Scholar scraping — avoids Python TLS fingerprinting).  
+`git` must be configured with credentials for both GitHub and Overleaf to enable the auto-push in step 6.
 
 ## GitHub ↔ Overleaf
 
