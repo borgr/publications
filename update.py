@@ -62,6 +62,31 @@ def _simplify(text: str) -> str:
     return re.sub(r'[\W_]+', '', text.lower().strip())
 
 
+def _title_key(title: str) -> str:
+    """Simplify a title, taking the longer segment when a colon separates a short prefix.
+
+    Handles Scholar titles like "Project Debater: An Autonomous Debating System"
+    where the prefix is a project/conference name rather than part of the title.
+    """
+    t = title.strip()
+    if ':' in t:
+        parts = [p.strip() for p in t.split(':', 1)]
+        t = max(parts, key=len)
+    return _simplify(t)
+
+
+def _titles_match(incoming: str, known: str, cutoff: float = 0.85) -> bool:
+    """Return True if two titles are likely the same paper."""
+    a, b = _title_key(incoming), _title_key(known)
+    if difflib.SequenceMatcher(None, a, b).ratio() >= cutoff:
+        return True
+    # Suffix check: "An autonomous debating system" vs "Project Debater an Autonomous..."
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if len(shorter) >= 15 and longer.endswith(shorter):
+        return True
+    return False
+
+
 def _mtime(path: str) -> float:
     """Return file mtime as float, or 0.0 if the file doesn't exist."""
     try:
@@ -143,13 +168,17 @@ def step2_add_new_papers(dry_run: bool) -> int:
     for row in ws.iter_rows(min_row=2, values_only=True):
         name = row[COL_NAME]
         if name:
-            simp_to_orig[_simplify(str(name))] = str(name)
-    known = list(simp_to_orig)
+            s = str(name)
+            simp_to_orig[_simplify(s)] = s
+            simp_to_orig[_title_key(s)] = s  # also index by colon-normalized variant
+    known_titles = list(simp_to_orig.values())
 
-    new_papers = [
-        p for p in papers
-        if not difflib.get_close_matches(_simplify(p["title"]), known, n=1, cutoff=0.85)
-    ]
+    def _is_new(p: dict) -> bool:
+        if "patent" in p.get("venue", "").lower():
+            return False
+        return not any(_titles_match(p["title"], existing) for existing in known_titles)
+
+    new_papers = [p for p in papers if _is_new(p)]
     if not new_papers:
         print("  No new papers found.")
         return 0
@@ -159,9 +188,9 @@ def step2_add_new_papers(dry_run: bool) -> int:
     for i, p in enumerate(new_papers, 1):
         year_val = int(p["year"]) if p["year"].isdigit() else p["year"]
         simp = _simplify(p["title"])
-        best_k = max(known, key=lambda k: difflib.SequenceMatcher(None, simp, k).ratio()) if known else ""
-        best_score = difflib.SequenceMatcher(None, simp, best_k).ratio() if best_k else 0
-        hint = (f"\n        ↑ closest in xlsx: {simp_to_orig[best_k][:60]!r} ({best_score:.0%})"
+        best_existing = max(known_titles, key=lambda t: difflib.SequenceMatcher(None, simp, _simplify(t)).ratio()) if known_titles else ""
+        best_score = difflib.SequenceMatcher(None, simp, _simplify(best_existing)).ratio() if best_existing else 0
+        hint = (f"\n        ↑ closest in xlsx: {best_existing[:60]!r} ({best_score:.0%})"
                 if best_score > 0.60 else "")
         print(f"    [{year_val}] {p['title'][:70]}{hint}")
 
