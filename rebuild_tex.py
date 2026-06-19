@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Rebuild example.tex and wzmn.bib with the latest publication data.
+"""Rebuild overleaf/main.tex and overleaf/Wzmn.bib with the latest publication data.
 
-Calls build_bib.main() to produce wzmn.bib, then uses the returned
-bib key lists to update the \\nocite{} blocks in example.tex in-place.
+Calls build_bib.main() to produce Wzmn.bib, then uses the returned
+bib key lists to update the \\nocite{} blocks in main.tex in-place.
 """
 
 import json
@@ -86,11 +86,14 @@ def _update_profile_stats(tex: str) -> str:
         print(f"Warning: profile_stats.json missing 'citations' or 'h_index'")
         return tex
 
+    if not _STATS_RE.search(tex):
+        print("Warning: could not find Citations/h-index block in tex to update")
+        return tex
     new_tex = _STATS_RE.sub(
         f'\\\\textbf{{Citations\t{citations}\nh-index\t{h_index}\n}}', tex
     )
     if new_tex == tex:
-        print("Warning: could not find Citations/h-index block in tex to update")
+        print(f"  Citations/h-index already current ({citations}, {h_index})")
     return new_tex
 
 

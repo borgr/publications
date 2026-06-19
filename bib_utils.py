@@ -11,8 +11,8 @@ def read_df():
     df = df.rename(
         columns={'The Science of Deep Learning': 'The Science of\nDeep Learning'})
     x = "Time of publish ID"
-    df = df.dropna(subset=[x, 'Name'])
-    df = df.sort_values(x)
+    df = df.dropna(subset=['Name'])
+    df = df.sort_values(x, na_position='last')
     df["Name"] = df["Name"].apply(lambda x: x.strip())
     df["Bib"] = df["Bib"].apply(lambda x: str(x).strip() if pd.notna(x) else x)
     return df

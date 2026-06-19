@@ -7,7 +7,7 @@ Steps (each auto-skips if output is already newer than its inputs):
   3. Resolve arXiv entries in orig.bib to published BibTeX (in-place);
      also resolve xlsx entries with no Bib key and add them to orig.bib.
   4. Build wzmn.bib from orig.bib + xlsx metadata (via build_bib.py)
-  5. Rebuild example.tex with updated \\nocite{} blocks (via rebuild_tex.py)
+  5. Rebuild overleaf/main.tex with updated \\nocite{} blocks (via rebuild_tex.py)
   6. Commit changed files and push to origin (GitHub) and overleaf remotes
 
 Usage:
@@ -323,7 +323,7 @@ def step4_build_bib(dry_run: bool):
 # ── Step 5 ─────────────────────────────────────────────────────────────────────
 
 def step5_rebuild_tex(dry_run: bool, cats) -> None:
-    print("\n[Step 5] Rebuilding example.tex")
+    print("\n[Step 5] Rebuilding overleaf/main.tex")
     if dry_run:
         print("  (dry-run: skipped)")
         return
@@ -454,12 +454,12 @@ def main() -> None:
     else:
         cats = step4_build_bib(args.dry_run)
 
-    # Step 5 — rebuild example.tex; auto-skip if it is newer than wzmn.bib
+    # Step 5 — rebuild overleaf/main.tex; auto-skip if it is newer than wzmn.bib
     tex_stale = _mtime(TEX_PATH) < _mtime(WZMN_BIB)
     if args.skip_tex:
         print("\n[Step 5] Skipped.")
     elif not args.force and not tex_stale:
-        print("\n[Step 5] Auto-skipped — example.tex is newer than wzmn.bib.")
+        print("\n[Step 5] Auto-skipped — overleaf/main.tex is newer than wzmn.bib.")
     else:
         step5_rebuild_tex(args.dry_run, cats)
 
