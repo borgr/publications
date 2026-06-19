@@ -4,7 +4,7 @@
 Usage:
     python fetch_citations.py [USER_ID_OR_URL] [-o OUTPUT]
 
-Defaults to Leshem Choshen's profile and citations.csv next to this file.
+Defaults to the profile and citations.csv configured in config.py.
 
 Dependencies: beautifulsoup4  (curl is used for HTTP, no requests library needed)
     pip install beautifulsoup4
@@ -23,7 +23,9 @@ from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
-DEFAULT_USER_ID = "8b8IhUYAAAAJ"
+import config
+
+DEFAULT_USER_ID = config.SCHOLAR_USER_ID
 DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citations.csv")
 
 # Scholar's default page size; mirrors what a browser's "Show more" click fetches
@@ -267,7 +269,7 @@ def main() -> None:
         "user",
         nargs="?",
         default=DEFAULT_USER_ID,
-        help="Scholar user ID or full profile URL (default: Leshem Choshen)",
+        help=f"Scholar user ID or full profile URL (default: {DEFAULT_USER_ID})",
     )
     parser.add_argument(
         "-o",

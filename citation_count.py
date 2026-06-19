@@ -8,7 +8,9 @@ from scholarly import scholarly
 # pg = ProxyGenerator()
 # pg.FreeProxies()
 # scholarly.use_proxy(pg)
-AUTHOR = "Leshem Choshen"
+import sys, os; sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import config
+AUTHOR = config.AUTHOR_NAME
 
 
 def main(author=AUTHOR):

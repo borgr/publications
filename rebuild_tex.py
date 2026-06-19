@@ -15,9 +15,12 @@ sys.path.insert(0, FILE_DIR)
 
 import build_bib
 from build_bib import BibCategories
+import config
 
-TEX_PATH   = os.path.join(FILE_DIR, "overleaf", "main.tex")
-STATS_PATH = os.path.join(FILE_DIR, "profile_stats.json")
+TEX_PATH      = os.path.join(FILE_DIR, "overleaf", "main.tex")
+STATS_PATH    = os.path.join(FILE_DIR, "profile_stats.json")
+OVERLEAF_DIR  = os.path.join(FILE_DIR, "overleaf")
+_BST_FILES    = ["planyr-rev.bst", "planyr.bst", "iclr-based.bst"]
 
 # Matches \nocite{...} only at the start of a line (skips commented-out % \nocite lines).
 _NOCITE_RE = re.compile(r'^\\nocite\{[^}]*\}', re.MULTILINE)
@@ -66,7 +69,57 @@ def _replace_nocite_after_comment(tex, comment_text, new_keys):
     return tex[:abs_start] + _nocite_str(new_keys) + tex[abs_end:]
 
 
-_STATS_RE = re.compile(r'\\textbf\{Citations\t(\d+)\nh-index\t(\d+)\n\}')
+_STATS_RE   = re.compile(r'\\textbf\{Citations\t(\d+)\nh-index\t(\d+)\n\}')
+_AUTHOR_LINE_RE = re.compile(r'(\\noindent\\today\n\n?)([^\n]+)(\n\\textbf\{Citations)', re.MULTILINE)
+
+
+def patch_bst_author(author_name: str = None) -> None:
+    """Replace hardcoded author name in all BST files in overleaf/ from config."""
+    if author_name is None:
+        author_name = config.AUTHOR_NAME
+    author_first = author_name.split()[0]
+    author_last  = author_name.split()[-1]
+    for bst_name in _BST_FILES:
+        bst_path = os.path.join(OVERLEAF_DIR, bst_name)
+        if not os.path.exists(bst_path):
+            continue
+        with open(bst_path) as f:
+            original = f.read()
+        patched = original
+        # Replace any full-name string literal (catches comparisons and formatted output)
+        for old_name in _find_author_names_in_bst(patched):
+            patched = patched.replace(f'"{old_name}"', f'"{author_name}"')
+            # Also fix first/last in format.name$ purify$ comparisons
+            old_first = old_name.split()[0]
+            old_last  = old_name.split()[-1]
+            patched = patched.replace(
+                f'format.name$ purify$ "{old_first}" =',
+                f'format.name$ purify$ "{author_first}" ='
+            )
+            patched = patched.replace(
+                f'format.name$ purify$ "{old_last}" =',
+                f'format.name$ purify$ "{author_last}" ='
+            )
+        if patched != original:
+            with open(bst_path, "w") as f:
+                f.write(patched)
+            print(f"  Patched author name in {bst_name}")
+
+
+def _find_author_names_in_bst(bst_text: str) -> list:
+    """Extract author full-name strings used in name comparisons (t "Name" = pattern)."""
+    return re.findall(r't "([A-Z][a-z]+ [A-Z][a-z]+)" =', bst_text)
+
+
+def _update_author_name_in_tex(tex: str) -> str:
+    """Replace the author name line between \\noindent\\today and \\textbf{Citations."""
+    author_name = config.AUTHOR_NAME
+    m = _AUTHOR_LINE_RE.search(tex)
+    if not m:
+        return tex
+    if m.group(2) == author_name:
+        return tex
+    return _AUTHOR_LINE_RE.sub(r'\g<1>' + author_name + r'\g<3>', tex)
 
 
 def _update_profile_stats(tex: str) -> str:
@@ -98,6 +151,7 @@ def _update_profile_stats(tex: str) -> str:
 
 
 def update_tex(tex, cats: BibCategories):
+    tex = _update_author_name_in_tex(tex)
     # Refereed Articles: first uncommented nocite = journals
     tex = _replace_first_nocite_in_chapter(tex, "Refereed Articles", cats.journals)
     # Refereed Articles: nocite after "% Conferences:" comment = conferences
@@ -111,7 +165,9 @@ def update_tex(tex, cats: BibCategories):
 
 
 def main(cats: BibCategories = None):
-    """Update example.tex. If cats is provided, skip re-running build_bib."""
+    """Update overleaf/main.tex. If cats is provided, skip re-running build_bib."""
+    patch_bst_author()
+
     if cats is None:
         cats = build_bib.main()
 

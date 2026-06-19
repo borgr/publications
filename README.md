@@ -106,9 +106,8 @@ python update.py --force
 
 ## Updating for a different author
 
-1. **Scholar user ID** — change `DEFAULT_USER_ID` in `fetch_citations.py`
-2. **Author name formatting** — find `"Leshem Choshen"` in `overleaf/planyr-rev.bst` and replace with your name (controls bold/italic and ST/PI superscripts)
-3. **Overleaf project** — update the submodule URL in `.gitmodules` and re-run `git submodule sync`
+1. **Edit `config.py`** — change `AUTHOR_NAME` and `SCHOLAR_USER_ID`. The pipeline propagates the name into the BST files and `main.tex` automatically on the next run.
+2. **Overleaf project** — update the submodule URL in `.gitmodules` and re-run `git submodule sync`.
 
 ## Citation count display
 
