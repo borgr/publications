@@ -32,10 +32,14 @@ sys.path.insert(0, FILE_DIR)
 
 from resolve_arxiv import (
     _PUBLISHED_SOURCES,
+    _DEPRIORITIZE_AFTER,
     _get_arxiv_id,
     gen_key,
     get_arxiv_entries,
+    load_attempts,
     resolve,
+    save_attempts,
+    sort_by_attempts,
     update_bib_inplace,
 )
 
@@ -255,9 +259,13 @@ def step3_resolve(dry_run: bool) -> tuple:
     with open(BIB_PATH) as f:
         bib_text = f.read()
 
+    attempts = load_attempts()
+
     # Part A: existing arXiv entries in orig.bib
-    arxiv_entries = get_arxiv_entries(bib_text)
-    print(f"  {len(arxiv_entries)} arXiv entries to check in orig.bib...")
+    arxiv_entries = sort_by_attempts(get_arxiv_entries(bib_text), attempts)
+    n_deprio = sum(1 for e in arxiv_entries if attempts.get(e["item_name"], 0) >= _DEPRIORITIZE_AFTER)
+    print(f"  {len(arxiv_entries)} arXiv entries to check in orig.bib"
+          + (f" ({n_deprio} with ≥{_DEPRIORITIZE_AFTER} prior attempts sorted last)" if n_deprio else "") + "...")
     updates = []
     for entry in arxiv_entries:
         key      = entry["item_name"]
@@ -266,11 +274,12 @@ def step3_resolve(dry_run: bool) -> tuple:
         print(f"    [{key[:40]}] {label:<22}", end=" ", flush=True)
         bib, source = resolve(entry["title"], arxiv_id, key, entry.get("content", ""))
         print(f"→ {source}")
+        attempts[key] = attempts.get(key, 0) + 1
         updates.append((key, bib, source))
         time.sleep(0.5)
 
     # Part B: xlsx entries with no Bib key
-    missing_entries = _get_xlsx_missing(bib_text)
+    missing_entries = sort_by_attempts(_get_xlsx_missing(bib_text), attempts)
     new_entries = []
     not_found = []
     if missing_entries:
@@ -280,11 +289,14 @@ def step3_resolve(dry_run: bool) -> tuple:
         print(f"    [{key:<40}]", end=" ", flush=True)
         bib, source = resolve(entry["title"], None, key, "")
         print(f"→ {source}")
+        attempts[key] = attempts.get(key, 0) + 1
         if bib:
             new_entries.append((key, bib))
         else:
             not_found.append((entry["title"][:70], key))
         time.sleep(0.5)
+
+    save_attempts(attempts)
 
     # Also track arXiv entries that couldn't be resolved to any bib at all
     for key, bib, source in updates:

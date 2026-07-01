@@ -32,6 +32,7 @@ WIPE_FILES = {
     "profile_stats.json":     "Scholar profile stats (total citations, h-index)",
     "orig.bib":               "raw BibTeX entries",
     "overleaf/Wzmn.bib":      "generated bibliography",
+    "resolve_attempts.json":  "resolve attempt counters",
     "tmp.csv":                "temporary Scholar fetch file",
 }
 XLSX_PATH    = os.path.join(FILE_DIR, "Contributions_table.xlsx")
@@ -75,6 +76,13 @@ def wipe_tmp_csv():
     if os.path.exists(path):
         os.remove(path)
         print("  Deleted tmp.csv")
+
+
+def wipe_resolve_attempts():
+    path = os.path.join(FILE_DIR, "resolve_attempts.json")
+    if os.path.exists(path):
+        os.remove(path)
+        print("  Deleted resolve_attempts.json")
 
 
 def wipe_contributions_xlsx():
@@ -145,12 +153,13 @@ def main():
     args = parser.parse_args()
 
     print("This will erase all personal data from the pipeline:")
-    print("  • citations.csv          (paper citation counts)")
-    print("  • Contributions_table.xlsx  (all paper entries)")
-    print("  • orig.bib               (raw BibTeX)")
-    print("  • profile_stats.json     (Scholar totals)")
-    print("  • overleaf/Wzmn.bib      (generated bibliography)")
-    print("  • overleaf/main.tex      → replaced with template.tex")
+    print("  • citations.csv              (paper citation counts)")
+    print("  • Contributions_table.xlsx   (all paper entries)")
+    print("  • orig.bib                   (raw BibTeX)")
+    print("  • profile_stats.json         (Scholar totals)")
+    print("  • overleaf/Wzmn.bib          (generated bibliography)")
+    print("  • resolve_attempts.json      (resolve attempt counters)")
+    print("  • overleaf/main.tex          → replaced with template.tex")
     if args.overleaf_url:
         print(f"  • overleaf/ submodule    → {args.overleaf_url}")
     print()
@@ -164,6 +173,7 @@ def main():
     wipe_orig_bib()
     wipe_wzmn_bib()
     wipe_tmp_csv()
+    wipe_resolve_attempts()
     wipe_contributions_xlsx()
     reset_main_tex()
 

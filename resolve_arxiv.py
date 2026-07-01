@@ -30,8 +30,13 @@ sys.path.insert(0, FILE_DIR)
 
 from bib_utils import parse_bibtex, read_df
 
-DEFAULT_BIB = os.path.join(FILE_DIR, "orig.bib")
+DEFAULT_BIB    = os.path.join(FILE_DIR, "orig.bib")
 DEFAULT_OUTPUT = os.path.join(FILE_DIR, "resolved.bib")
+ATTEMPTS_PATH  = os.path.join(FILE_DIR, "resolve_attempts.json")
+
+# Entries tried >= this many times are sorted to the end of each run.
+# They still run (not skipped), but fresh entries get S2 quota first.
+_DEPRIORITIZE_AFTER = 5
 
 _CURL_FLAGS = [
     "--silent", "--compressed", "--max-time", "20",
@@ -79,6 +84,38 @@ def _http_get_json(url: str, retries: int = 2) -> dict | None:
                 return None
             time.sleep(3)
     return None
+
+
+# ── Attempt tracking ─────────────────────────────────────────────────────────
+
+def load_attempts() -> dict:
+    """Load {key: attempt_count} from disk; return empty dict if missing."""
+    try:
+        with open(ATTEMPTS_PATH) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_attempts(attempts: dict) -> None:
+    """Persist attempt counts atomically."""
+    tmp = ATTEMPTS_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(attempts, f, indent=2, sort_keys=True)
+    os.replace(tmp, ATTEMPTS_PATH)
+
+
+def sort_by_attempts(candidates: list, attempts: dict) -> list:
+    """Return candidates sorted so least-tried entries come first.
+
+    Entries with >= _DEPRIORITIZE_AFTER prior attempts are moved to the end
+    so fresh/new entries consume S2 quota before repeatedly-failing ones.
+    """
+    def _key(e):
+        n = attempts.get(e["item_name"], 0)
+        # Two-level sort: deprioritized bucket (1) vs fresh (0), then count within bucket
+        return (1 if n >= _DEPRIORITIZE_AFTER else 0, n)
+    return sorted(candidates, key=_key)
 
 
 # ── BibTeX utilities ──────────────────────────────────────────────────────────
@@ -463,9 +500,15 @@ def main() -> None:
             seen.add(e["item_name"])
             candidates.append(e)
 
+    attempts = load_attempts()
+    candidates = sort_by_attempts(candidates, attempts)
+
     print(f"Found {len(arxiv_entries)} arXiv entries in {os.path.basename(args.bib)}")
     if not args.skip_missing:
         print(f"Found {len(missing_entries)} xlsx entries with no BibTeX")
+    n_deprio = sum(1 for e in candidates if attempts.get(e["item_name"], 0) >= _DEPRIORITIZE_AFTER)
+    if n_deprio:
+        print(f"  ({n_deprio} entries with ≥{_DEPRIORITIZE_AFTER} prior attempts sorted last)")
     print(f"Resolving {len(candidates)} candidates...\n")
 
     resolved_bibs: list[str] = []
@@ -482,6 +525,9 @@ def main() -> None:
 
         bib, source = resolve(title, arxiv_id, key, content)
         print(f"→ {source}")
+
+        attempts[key] = attempts.get(key, 0) + 1
+        save_attempts(attempts)
 
         report.append((key, source, bool(bib)))
         if bib:
