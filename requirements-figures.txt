@@ -1,0 +1,10 @@
+# Only for the standalone figure scripts (papers_fig.py, papers_graph.py).
+# These are not part of the update pipeline, and their dependencies are heavy
+# enough that requiring them for a bibliography rebuild is not worth it.
+-r requirements.txt
+matplotlib>=3.8
+numpy>=1.23
+scikit-learn>=1.3
+scipy>=1.11
+seaborn>=0.13
+umap-learn>=0.5

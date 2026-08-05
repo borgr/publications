@@ -11,19 +11,18 @@ Dependencies: beautifulsoup4  (curl is used for HTTP, no requests library needed
 """
 
 import argparse
-import csv
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
 import config
+from citations_io import write_citation_rows
 
 DEFAULT_USER_ID = config.SCHOLAR_USER_ID
 DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citations.csv")
@@ -108,12 +107,27 @@ def _fetch_page(user_id: str, start: int) -> str:
     raise RuntimeError(f"Failed to fetch page after {_MAX_RETRIES} attempts (persistent 429).")
 
 
+def _extract_scholar_id(anchor) -> str:
+    """Return the stable per-paper Scholar ID from a title anchor's href.
+
+    The href carries `citation_for_view=USER:PUBID` (e.g. `8b8I...:RHpTSmoSYBkC`).
+    That ID survives title edits and re-rankings, so recording it is what lets
+    the citation join be an exact lookup instead of a title-similarity guess.
+    Returns "" if absent, which degrades to title matching rather than failing.
+    """
+    if anchor is None:
+        return ""
+    href = anchor.get("href") or ""
+    params = parse_qs(urlparse(href).query)
+    return (params.get("citation_for_view") or [""])[0].strip()
+
+
 def _parse_page(html: str) -> list[dict]:
     """Parse one page of Scholar HTML into a list of paper dicts.
 
     CSS selectors used (stable since ~2015):
       tr.gsc_a_tr   — paper row
-      .gsc_a_at     — title anchor
+      .gsc_a_at     — title anchor (also carries citation_for_view=USER:PUBID)
       .gs_gray      — authors (index 0) and venue (index 1)
       .gsc_a_ac     — citation count anchor
       .gsc_a_y span — year span
@@ -145,6 +159,7 @@ def _parse_page(html: str) -> list[dict]:
                 "venue": gray_els[1].get_text(strip=True) if len(gray_els) > 1 else "",
                 "citations": cite_el.get_text(strip=True) if cite_el else "",
                 "year": year_el.get_text(strip=True) if year_el else "",
+                "scholar_id": _extract_scholar_id(title_el),
             }
         )
     return papers
@@ -239,26 +254,21 @@ def scrape_profile(user_id: str, delay: float = 3.0) -> tuple[list[dict], dict |
             "WARNING: no citation counts found — Scholar's HTML structure may have changed.",
             file=sys.stderr,
         )
+    # The stable IDs are what keep the citation join exact; losing them silently
+    # would degrade every later run back to title guessing.
+    if all_papers and not any(p.get("scholar_id") for p in all_papers):
+        print(
+            "WARNING: no citation_for_view IDs found — Scholar's link format may have "
+            "changed. The citation join will fall back to title matching.",
+            file=sys.stderr,
+        )
 
     return all_papers, stats
 
 
 def write_csv(papers: list[dict], output_path: str) -> None:
-    """Write the 3-row-per-paper format used by citations.csv (atomic write)."""
-    tmp_path = output_path + ".tmp"
-    try:
-        with open(tmp_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["Title", "Cited by", "Year"])
-            for p in papers:
-                writer.writerow([p["title"], p["citations"], p["year"]])
-                writer.writerow([p["authors"], "", ""])
-                writer.writerow([p["venue"], "", ""])
-        os.replace(tmp_path, output_path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+    """Write citations.csv (one row per paper, atomic)."""
+    write_citation_rows(papers, output_path)
 
 
 def main() -> None:

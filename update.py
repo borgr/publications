@@ -1,42 +1,54 @@
 #!/usr/bin/env python3
 """One-command update for the publications pipeline.
 
-Steps (each auto-skips if output is already newer than its inputs):
-  1. Refresh citations.csv from Google Scholar
-  2. Add new papers (in Scholar, not in xlsx) to Contributions_table.xlsx
-  3. Resolve arXiv entries in orig.bib to published BibTeX (in-place);
-     also resolve xlsx entries with no Bib key and add them to orig.bib.
-  4. Build wzmn.bib from orig.bib + xlsx metadata (via build_bib.py)
-  5. Rebuild overleaf/main.tex with updated \\nocite{} blocks (via rebuild_tex.py)
-  6. Commit changed files and push to origin (GitHub) and overleaf remotes
+Steps. Each is skipped when the *contents* of its inputs are unchanged since
+that step last succeeded (recorded in .pipeline_state.json), so re-running is
+cheap and safe:
+
+  1. Refresh citations.csv from Google Scholar (time-based: --fetch-age)
+  2. Add papers that are in Scholar but not yet in the publications table
+  3. Resolve arXiv entries in orig.bib to their published BibTeX, and resolve
+     table rows that have no entry yet
+  4. Build overleaf/Wzmn.bib from orig.bib + the table's venue/tag metadata
+  5. Rebuild overleaf/main.tex: \\nocite{} blocks, citation total, h-index
+  6. Regenerate WORKLIST.md -- everything the pipeline cannot decide itself
+  7. Commit and push to GitHub and Overleaf, rebasing if a remote has moved
+
+Exits non-zero if anything failed, and notifies, so an unattended run cannot
+fail silently while the CV keeps looking current.
 
 Usage:
-    python update.py [--dry-run] [--force] [--no-push]
+    python update.py [--dry-run] [--force] [--no-push] [--no-notify]
                      [--skip-fetch] [--skip-xlsx] [--skip-resolve] [--skip-publications]
                      [--skip-tex] [--fetch-age HOURS] [--user SCHOLAR_USER_ID]
 """
 
 import argparse
-import csv
 import difflib
 import os
-import re
 import subprocess
 import sys
 import time
 
-import openpyxl
-
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
+import notify
+
+from citations_io import read_citation_rows
+from identity import IdentityStore
+from pipeline_state import PipelineState
+from table_io import CSV_PATH, XLSX_PATH, append_rows, read_table, set_bib_keys
+from identity import normalize_title, titles_match
 from resolve_arxiv import (
     _PUBLISHED_SOURCES,
     _DEPRIORITIZE_AFTER,
     _get_arxiv_id,
     gen_key,
     get_arxiv_entries,
+    get_missing_bib_entries,
     load_attempts,
+    placeholder_key,
     resolve,
     save_attempts,
     sort_by_attempts,
@@ -44,110 +56,39 @@ from resolve_arxiv import (
 )
 
 CITATIONS_CSV = os.path.join(FILE_DIR, "citations.csv")
-XLSX_PATH     = os.path.join(FILE_DIR, "Contributions_table.xlsx")
+# The table is papers.csv once migrated, the xlsx before that.
+TABLE_PATH    = CSV_PATH if os.path.exists(CSV_PATH) else XLSX_PATH
 BIB_PATH      = os.path.join(FILE_DIR, "orig.bib")
+STATS_PATH    = os.path.join(FILE_DIR, "profile_stats.json")
+VENUES_PATH   = os.path.join(FILE_DIR, "venues.yaml")
 OVERLEAF_DIR  = os.path.join(FILE_DIR, "overleaf")
 WZMN_BIB      = os.path.join(OVERLEAF_DIR, "Wzmn.bib")
+WORKLIST_PATH = os.path.join(FILE_DIR, "WORKLIST.md")
 TEX_PATH      = os.path.join(OVERLEAF_DIR, "main.tex")
 
-# xlsx column indices (0-based matching ws.iter_rows)
-COL_ID      = 0   # Time of publish ID
-COL_VENUE   = 2
-COL_NAME    = 3
-COL_BIB     = 4
-COL_AUTHORS = 5
-COL_YEAR    = 6
-COL_PAPER   = 26
+# Columns are addressed by name via table_io; the positional COL_* constants
+# that used to live here (COL_PAPER = 26, alongside `row_data = [None] * 37`)
+# are gone, along with the class of bug where inserting a column misfiled data.
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _simplify(text: str) -> str:
-    return re.sub(r'[\W_]+', '', text.lower().strip())
+# Each step's inputs. A step re-runs when any of its inputs' *contents* differ
+# from the last successful run. Two of these lists fix real skip bugs: step 4
+# ignored citations.csv, so refreshed counts never reached the bibliography, and
+# step 5 ignored profile_stats.json, so a new h-index never reached the CV.
+STEP_INPUTS = {
+    "resolve":      [TABLE_PATH, CITATIONS_CSV],
+    "build_bib":    [BIB_PATH, TABLE_PATH, CITATIONS_CSV, VENUES_PATH],
+    "rebuild_tex":  [WZMN_BIB, STATS_PATH],
+}
 
-
-def _title_key(title: str) -> str:
-    """Simplify a title, taking the longer segment when a colon separates a short prefix.
-
-    Handles Scholar titles like "Project Debater: An Autonomous Debating System"
-    where the prefix is a project/conference name rather than part of the title.
-    """
-    t = title.strip()
-    if ':' in t:
-        parts = [p.strip() for p in t.split(':', 1)]
-        t = max(parts, key=len)
-    return _simplify(t)
-
-
-def _titles_match(incoming: str, known: str, cutoff: float = 0.85) -> bool:
-    """Return True if two titles are likely the same paper."""
-    a, b = _title_key(incoming), _title_key(known)
-    if difflib.SequenceMatcher(None, a, b).ratio() >= cutoff:
-        return True
-    # Suffix check: "An autonomous debating system" vs "Project Debater an Autonomous..."
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    if len(shorter) >= 15 and longer.endswith(shorter):
-        return True
-    return False
-
-
-def _mtime(path: str) -> float:
-    """Return file mtime as float, or 0.0 if the file doesn't exist."""
-    try:
-        return os.path.getmtime(path)
-    except OSError:
-        return 0.0
-
-
-def _age_hours(path: str) -> float:
-    """Return file age in hours, or inf if the file doesn't exist."""
-    mt = _mtime(path)
-    return (time.time() - mt) / 3600 if mt else float("inf")
-
-
-def _parse_scholar_csv(csv_path: str) -> list:
-    """Parse citations.csv (3-row-per-paper) into list of dicts."""
-    papers = []
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        rows = list(csv.reader(f))
-    i = 1  # skip header row
-    while i < len(rows):
-        r0 = rows[i]     if i     < len(rows) else []
-        r1 = rows[i + 1] if i + 1 < len(rows) else []
-        r2 = rows[i + 2] if i + 2 < len(rows) else []
-        title   = r0[0].strip() if r0 else ""
-        year    = r0[2].strip() if len(r0) > 2 else ""
-        authors = r1[0].strip() if r1 else ""
-        venue   = r2[0].strip() if r2 else ""
-        if title:
-            papers.append({"title": title, "year": year, "authors": authors, "venue": venue})
-        i += 3
-    return papers
-
-
-def _get_max_id(ws) -> int:
-    max_id = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        v = row[COL_ID]
-        if isinstance(v, (int, float)) and v > 0:
-            max_id = max(max_id, int(v))
-    return max_id
-
-
-def _last_data_row(ws) -> int:
-    """Return the row number of the last row with a non-empty Name cell."""
-    last = 1
-    for row in ws.iter_rows(min_row=2):
-        if row[COL_NAME].value:
-            last = row[0].row
-    return last
 
 
 
 # ── Step 1 ─────────────────────────────────────────────────────────────────────
 
 def step1_fetch(dry_run: bool, user: str | None = None) -> None:
-    print("[Step 1] Fetching Scholar profile → citations.csv")
     if dry_run:
         print("  (dry-run: skipped)")
         return
@@ -162,25 +103,16 @@ def step1_fetch(dry_run: bool, user: str | None = None) -> None:
 
 def step2_add_new_papers(dry_run: bool) -> int:
     """Return number of new papers added (or that would be added)."""
-    print("\n[Step 2] Checking for new papers not in Contributions_table.xlsx")
-    wb     = openpyxl.load_workbook(XLSX_PATH)
-    ws     = wb.active
-    papers = _parse_scholar_csv(CITATIONS_CSV)
+    print("\n[Step 2] Checking for new papers not in the publications table")
+    df     = read_table()
+    papers = read_citation_rows(CITATIONS_CSV)
 
-    # Build simplified→original mapping for both matching and display
-    simp_to_orig: dict[str, str] = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        name = row[COL_NAME]
-        if name:
-            s = str(name)
-            simp_to_orig[_simplify(s)] = s
-            simp_to_orig[_title_key(s)] = s  # also index by colon-normalized variant
-    known_titles = list(simp_to_orig.values())
+    known_titles = [str(n) for n in df["Name"].dropna()]
 
     def _is_new(p: dict) -> bool:
-        if "patent" in p.get("venue", "").lower():
+        if "patent" in (p.get("venue") or "").lower():
             return False
-        return not any(_titles_match(p["title"], existing) for existing in known_titles)
+        return not any(titles_match(p["title"], existing) for existing in known_titles)
 
     new_papers = [p for p in papers if _is_new(p)]
     if not new_papers:
@@ -188,98 +120,84 @@ def step2_add_new_papers(dry_run: bool) -> int:
         return 0
 
     print(f"  {len(new_papers)} new paper(s):")
-    max_id = _get_max_id(ws)
-    for i, p in enumerate(new_papers, 1):
-        year_val = int(p["year"]) if p["year"].isdigit() else p["year"]
-        simp = _simplify(p["title"])
-        best_existing = max(known_titles, key=lambda t: difflib.SequenceMatcher(None, simp, _simplify(t)).ratio()) if known_titles else ""
-        best_score = difflib.SequenceMatcher(None, simp, _simplify(best_existing)).ratio() if best_existing else 0
-        hint = (f"\n        ↑ closest in xlsx: {best_existing[:60]!r} ({best_score:.0%})"
-                if best_score > 0.60 else "")
+    for p in new_papers:
+        year_val = int(p["year"]) if str(p["year"]).isdigit() else p["year"]
+        norm = normalize_title(p["title"])
+        scored = sorted(
+            ((difflib.SequenceMatcher(None, norm, normalize_title(t)).ratio(), t)
+             for t in known_titles), reverse=True)
+        hint = ""
+        if scored and scored[0][0] > 0.60:
+            hint = (f"\n        ↑ closest existing row: {scored[0][1][:60]!r} "
+                    f"({scored[0][0]:.0%})")
         print(f"    [{year_val}] {p['title'][:70]}{hint}")
 
-    if not dry_run:
-        insert_at = _last_data_row(ws) + 1
-        ws.insert_rows(insert_at, len(new_papers))
-        for i, p in enumerate(new_papers):
-            year_val = int(p["year"]) if p["year"].isdigit() else p["year"]
-            row_data = [None] * 37
-            row_data[COL_ID]      = max_id + i + 1
-            row_data[COL_VENUE]   = p["venue"]
-            row_data[COL_NAME]    = p["title"]
-            row_data[COL_AUTHORS] = p["authors"]
-            row_data[COL_YEAR]    = year_val
-            row_data[COL_PAPER]   = 1
-            for j, val in enumerate(row_data):
-                ws.cell(row=insert_at + i, column=j + 1).value = val
-        wb.save(XLSX_PATH)
-        print(f"  Saved {len(new_papers)} new row(s) to Contributions_table.xlsx")
-    else:
-        print("  (dry-run: xlsx not modified)")
-    return len(new_papers)
+    if dry_run:
+        print("  (dry-run: table not modified)")
+        return len(new_papers)
+
+    # Written by column name. The previous positional write built a 37-slot list
+    # against hardcoded indices, so inserting a column silently misfiled values.
+    rows = []
+    for p in new_papers:
+        rows.append({
+            "Venue":   p.get("venue") or None,
+            "Name":    p["title"],
+            "Authors": p.get("authors") or None,
+            "year":    int(p["year"]) if str(p["year"]).isdigit() else None,
+            "Paper":   1,
+        })
+    added = append_rows(rows)
+    print(f"  Added {added} new row(s) to {os.path.basename(TABLE_PATH)}")
+    return added
 
 
 # ── Step 3 ─────────────────────────────────────────────────────────────────────
 
-def _get_xlsx_missing(bib_text: str) -> list:
-    """Return xlsx rows with no Bib key (or key absent from bib), with gen_key applied."""
-    from bib_utils import parse_bibtex as _parse_bib
-    try:
-        from bib_utils import read_df
-        df = read_df()
-    except Exception as exc:
-        print(f"  Warning: could not read xlsx: {exc}", file=sys.stderr)
-        return []
-    existing_keys = {e["item_name"] for e in _parse_bib(bib_text)}
-    missing = []
-    for _, row in df.iterrows():
-        bib_key = str(row.get("Bib", "")).strip()
-        name    = str(row.get("Name", "")).strip()
-        authors = str(row.get("Authors", "") or "").strip()
-        if authors.lower() == "nan":
-            authors = ""
-        year    = str(int(row.get("year", 0) or 0))
-        if not name:
-            continue
-        key_missing = not bib_key or bib_key.lower() in ("nan", "none") or bib_key not in existing_keys
-        if key_missing:
-            if bib_key and bib_key.lower() not in ("nan", "none"):
-                new_key = bib_key  # key was set in xlsx but not yet in orig.bib; preserve it
-            elif authors:
-                new_key = gen_key(authors, year, name)
-            else:
-                new_key = f"unknown{year}{_simplify(name)[:10]}"
-            missing.append({"title": name, "authors": authors, "year": year,
-                            "item_name": new_key, "content": ""})
-    return missing
-
-
 def step3_resolve(dry_run: bool) -> tuple:
-    print("\n[Step 3] Resolving BibTeX entries and updating orig.bib")
     with open(BIB_PATH) as f:
         bib_text = f.read()
 
     attempts = load_attempts()
+    # Identifiers seen during resolution are recorded here, so each paper is
+    # matched by ID rather than by title similarity from the next run onwards.
+    store = IdentityStore.load()
 
     # Part A: existing arXiv entries in orig.bib
     arxiv_entries = sort_by_attempts(get_arxiv_entries(bib_text), attempts)
     n_deprio = sum(1 for e in arxiv_entries if attempts.get(e["item_name"], 0) >= _DEPRIORITIZE_AFTER)
     print(f"  {len(arxiv_entries)} arXiv entries to check in orig.bib"
           + (f" ({n_deprio} with ≥{_DEPRIORITIZE_AFTER} prior attempts sorted last)" if n_deprio else "") + "...")
+
+    if dry_run:
+        # A dry run must not touch the network. Resolving every candidate takes
+        # hundreds of requests and several minutes of deliberate rate-limit
+        # sleeps, which is not what "show me what would change" should cost.
+        missing = get_missing_bib_entries(bib_text)
+        print(f"  (dry-run: no lookups performed)")
+        print(f"  Would query {len(arxiv_entries)} arXiv entries for a published version")
+        print(f"  Would look up {len(missing)} table row(s) with no entry in orig.bib:")
+        for entry in missing[:20]:
+            print(f"    [{entry['item_name']:<40}] {entry['title'][:60]}")
+        if len(missing) > 20:
+            print(f"    … and {len(missing) - 20} more")
+        return 0, 0, len(arxiv_entries), []
+
     updates = []
     for entry in arxiv_entries:
         key      = entry["item_name"]
         arxiv_id = _get_arxiv_id(entry)
         label    = f"arXiv:{arxiv_id}" if arxiv_id else "(no arXiv ID)"
         print(f"    [{key[:40]}] {label:<22}", end=" ", flush=True)
-        bib, source = resolve(entry["title"], arxiv_id, key, entry.get("content", ""))
+        bib, source = resolve(entry["title"], arxiv_id, key, entry.get("content", ""),
+                              store=store)
         print(f"→ {source}")
         attempts[key] = attempts.get(key, 0) + 1
         updates.append((key, bib, source))
         time.sleep(0.5)
 
-    # Part B: xlsx entries with no Bib key
-    missing_entries = sort_by_attempts(_get_xlsx_missing(bib_text), attempts)
+    # Part B: table rows with no usable entry in orig.bib
+    missing_entries = sort_by_attempts(get_missing_bib_entries(bib_text), attempts)
     new_entries = []
     not_found = []
     if missing_entries:
@@ -287,7 +205,7 @@ def step3_resolve(dry_run: bool) -> tuple:
     for entry in missing_entries:
         key = entry["item_name"]
         print(f"    [{key:<40}]", end=" ", flush=True)
-        bib, source = resolve(entry["title"], None, key, "")
+        bib, source = resolve(entry["title"], None, key, "", store=store)
         print(f"→ {source}")
         attempts[key] = attempts.get(key, 0) + 1
         if bib:
@@ -297,6 +215,7 @@ def step3_resolve(dry_run: bool) -> tuple:
         time.sleep(0.5)
 
     save_attempts(attempts)
+    store.save()
 
     # Also track arXiv entries that couldn't be resolved to any bib at all
     for key, bib, source in updates:
@@ -316,44 +235,35 @@ def step3_resolve(dry_run: bool) -> tuple:
 
     new_bib_text, n_replaced, n_appended = update_bib_inplace(bib_text, updates, new_entries)
 
-    # Write xlsx before orig.bib so orig.bib ends up as the newest file,
-    # which lets the mtime-based auto-skip correctly detect "step 3 already ran".
     if new_entries:
-        wb = openpyxl.load_workbook(XLSX_PATH)
-        ws = wb.active
+        # Write each resolved key back onto the row it came from. Taken straight
+        # from `missing_entries`, which already pairs the row's title with the
+        # key the entry was filed under -- rather than re-deriving the key with a
+        # second copy of gen_key, which is how the two implementations that used
+        # to exist here drifted apart.
         resolved_keys = {key for key, _ in new_entries}
-        for row in ws.iter_rows(min_row=2):
-            name_cell    = row[COL_NAME]
-            bib_cell     = row[COL_BIB]
-            authors_cell = row[COL_AUTHORS]
-            year_cell    = row[COL_YEAR]
-            if not name_cell.value or bib_cell.value:
-                continue
-            name    = str(name_cell.value).strip()
-            authors = str(authors_cell.value or "").strip()
-            year    = str(int(year_cell.value) if isinstance(year_cell.value, (int, float)) else year_cell.value or 0)
-            candidate_key = (gen_key(authors, year, name) if authors
-                             else f"unknown{year}{_simplify(name)[:10]}")
-            if candidate_key in resolved_keys:
-                bib_cell.value = candidate_key
-        wb.save(XLSX_PATH)
-        print(f"  Updated Bib keys in Contributions_table.xlsx")
+        assignments = {entry["title"]: entry["item_name"]
+                       for entry in missing_entries
+                       if entry["item_name"] in resolved_keys}
+        written = set_bib_keys(assignments)
+        if written:
+            print(f"  Wrote {written} Bib key(s) into {os.path.basename(TABLE_PATH)}")
 
-    # Always write orig.bib (even if content unchanged) to update its mtime,
-    # marking step 3 as "completed against current inputs" for the next auto-skip check.
-    with open(BIB_PATH, "w") as f:
-        f.write(new_bib_text)
-    if n_replaced or n_appended:
+    # Only write when something actually changed. Completion is recorded in
+    # .pipeline_state.json, so there is no longer any reason to rewrite an
+    # unchanged file just to advance its mtime.
+    if new_bib_text != bib_text:
+        with open(BIB_PATH, "w") as f:
+            f.write(new_bib_text)
         print(f"  Replaced {n_replaced} entries, appended {n_appended} entries → orig.bib updated")
     else:
-        print(f"  No bib changes — orig.bib mtime touched")
+        print("  No bib changes — orig.bib left untouched")
     return upgraded, n_appended, n_still_arxiv, not_found
 
 
 # ── Step 4 ─────────────────────────────────────────────────────────────────────
 
 def step4_build_bib(dry_run: bool):
-    print("\n[Step 4] Building wzmn.bib")
     if dry_run:
         print("  (dry-run: skipped)")
         return None
@@ -364,7 +274,6 @@ def step4_build_bib(dry_run: bool):
 # ── Step 5 ─────────────────────────────────────────────────────────────────────
 
 def step5_rebuild_tex(dry_run: bool, cats) -> None:
-    print("\n[Step 5] Rebuilding overleaf/main.tex")
     if dry_run:
         print("  (dry-run: skipped)")
         return
@@ -378,16 +287,32 @@ _OUTER_FILES = [
     "citations.csv",
     "profile_stats.json",
     "Contributions_table.xlsx",
+    "papers.csv",
     "orig.bib",
+    "identity.json",
+    "resolve_attempts.json",
+    ".pipeline_state.json",
+    "venues.yaml",
+    "WORKLIST.md",
     "overleaf",  # submodule pointer
 ]
 _OVERLEAF_FILES = ["main.tex", "Wzmn.bib"]
 
 
 def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: str) -> bool:
-    """Stage files, commit if changed, push. Returns True on success."""
+    """Stage files, commit if changed, rebase onto the remote, push.
+
+    Returns True on success. The rebase matters for Overleaf: editing the
+    project in Overleaf's own editor advances its remote, after which every
+    push from here is rejected until someone pulls by hand. Rebasing first
+    makes that self-healing instead of a standing manual chore.
+    """
     existing = [f for f in files if os.path.exists(os.path.join(repo_dir, f))]
-    subprocess.run(["git", "-C", repo_dir, "add", "--"] + existing, capture_output=True)
+    add = subprocess.run(["git", "-C", repo_dir, "add", "--"] + existing,
+                         capture_output=True, text=True)
+    if add.returncode != 0:
+        print(f"  [{remote}] git add failed: {add.stderr.strip()}")
+        return False
 
     diff = subprocess.run(["git", "-C", repo_dir, "diff", "--cached", "--quiet"], capture_output=True)
     if diff.returncode == 0:
@@ -402,34 +327,72 @@ def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: 
             return False
         print(f"  [{remote}] Committed.")
 
+    def _push() -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", repo_dir, "push", remote],
+                              capture_output=True, text=True)
+
     print(f"  [{remote}] Pushing…", end=" ", flush=True)
-    push = subprocess.run(["git", "-C", repo_dir, "push", remote], capture_output=True, text=True)
+    push = _push()
     if push.returncode == 0:
         print("ok")
         return True
-    print(f"FAILED\n    {push.stderr.strip()}")
+
+    # Rejected, most likely because the remote moved. Rebase and retry once.
+    print("rejected; rebasing onto remote…", end=" ", flush=True)
+    pull = subprocess.run(
+        ["git", "-C", repo_dir, "pull", "--rebase", "--autostash", remote],
+        capture_output=True, text=True,
+    )
+    if pull.returncode != 0:
+        print("FAILED")
+        print(f"    pull --rebase failed: {pull.stderr.strip()[:400]}")
+        subprocess.run(["git", "-C", repo_dir, "rebase", "--abort"], capture_output=True)
+        return False
+
+    push = _push()
+    if push.returncode == 0:
+        print("ok (after rebase)")
+        return True
+    print("FAILED")
+    print(f"    {push.stderr.strip()[:400]}")
     return False
 
 
-def step6_push(dry_run: bool) -> None:
-    print("\n[Step 6] Committing and pushing to Overleaf + GitHub")
+def step6_worklist(dry_run: bool) -> None:
+    """Regenerate WORKLIST.md so open items outlive the run's stdout."""
+    print("\n[Step 6] Regenerating WORKLIST.md")
     if dry_run:
         print("  (dry-run: skipped)")
         return
-
-    # Push submodule (overleaf/) → Overleaf
-    _git_commit_and_push(
-        OVERLEAF_DIR, _OVERLEAF_FILES,
-        "chore: auto-update publications pipeline output",
-        "origin",
+    result = subprocess.run(
+        [sys.executable, os.path.join(FILE_DIR, "scripts", "worklist.py"), "--quiet"],
+        capture_output=True, text=True,
     )
+    if result.returncode != 0:
+        # A worklist failure must not fail the pipeline: the generated CV is
+        # still correct, only the to-do summary is missing.
+        print(f"  Warning: could not generate WORKLIST.md: {result.stderr.strip()[:300]}")
+        return
+    if os.path.exists(WORKLIST_PATH):
+        with open(WORKLIST_PATH) as f:
+            open_items = sum(1 for line in f if line.startswith("- "))
+        print(f"  {open_items} open item(s) → WORKLIST.md")
 
-    # Push outer repo (publications/) → GitHub
-    _git_commit_and_push(
-        FILE_DIR, _OUTER_FILES,
-        "chore: auto-update publications pipeline output",
-        "origin",
-    )
+
+def step7_push(dry_run: bool) -> bool:
+    """Push both repos. Returns True only if every push succeeded."""
+    print("\n[Step 7] Committing and pushing to Overleaf + GitHub")
+    if dry_run:
+        print("  (dry-run: skipped)")
+        return True
+
+    message = "chore: auto-update publications pipeline output"
+    # Submodule (overleaf/) → Overleaf, then the outer repo → GitHub. Overleaf
+    # goes first so the submodule pointer the outer commit records already exists
+    # on the remote.
+    overleaf_ok = _git_commit_and_push(OVERLEAF_DIR, _OVERLEAF_FILES, message, "origin")
+    github_ok = _git_commit_and_push(FILE_DIR, _OUTER_FILES, message, "origin")
+    return overleaf_ok and github_ok
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
@@ -452,6 +415,8 @@ def main() -> None:
     parser.add_argument("--skip-publications", action="store_true", help="Skip step 4")
     parser.add_argument("--skip-tex",          action="store_true", help="Skip step 5")
     parser.add_argument("--no-push",           action="store_true", help="Skip step 6 (commit + push)")
+    parser.add_argument("--no-notify",         action="store_true",
+                        help="Do not post a desktop/CI notification on failure")
     parser.add_argument("--user", default=None,
                         help="Google Scholar user ID (passed to fetch_citations.py)")
     args = parser.parse_args()
@@ -460,67 +425,106 @@ def main() -> None:
     n_upgraded = n_appended = n_still_arxiv = 0
     not_found: list = []
     cats = None
+    state = PipelineState.load()
 
-    # Step 1 — re-fetch if citations.csv is stale
-    csv_age = _age_hours(CITATIONS_CSV)
+    def _should_run(step: str, skip_flag: bool) -> bool:
+        """Decide and explain. Returns True when the step should execute."""
+        if skip_flag:
+            print(f"  Skipped (--skip flag).")
+            return False
+        if args.force:
+            return True
+        changed = state.changed_inputs(step, STEP_INPUTS[step])
+        if not changed:
+            print(f"  Auto-skipped — inputs unchanged since "
+                  f"{state.steps[step]['completed_at']} "
+                  f"({', '.join(os.path.basename(p) for p in STEP_INPUTS[step])}).")
+            return False
+        print(f"  Inputs changed: {', '.join(os.path.basename(p) for p in changed)}")
+        return True
+
+    # Step 1 — re-fetch when the recorded fetch has aged out. Time-based rather
+    # than content-based: the whole point is to notice that the *remote* changed.
+    fetch_age = state.age_hours("fetch")
+    print("[Step 1] Fetching Scholar profile")
     if args.skip_fetch:
-        print("[Step 1] Skipped.")
-    elif not args.force and csv_age < args.fetch_age:
-        print(f"[Step 1] Auto-skipped — citations.csv is {csv_age:.1f}h old "
+        print("  Skipped (--skip-fetch).")
+    elif not args.force and fetch_age < args.fetch_age:
+        print(f"  Auto-skipped — last fetch was {fetch_age:.1f}h ago "
               f"(threshold: {args.fetch_age}h, use --force to override).")
     else:
         step1_fetch(args.dry_run, args.user)
+        if not args.dry_run:
+            state.mark_done("fetch", [CITATIONS_CSV])
+            state.save()
 
-    # Step 2 — add new papers (fast and idempotent; always run unless explicitly skipped)
+    # Step 2 — cheap and idempotent, so it always runs unless explicitly skipped.
     if args.skip_xlsx:
         print("\n[Step 2] Skipped.")
     else:
         n_added = step2_add_new_papers(args.dry_run)
 
-    # Step 3 — resolve bib entries; auto-skip if orig.bib is newer than both inputs
-    bib_stale = _mtime(BIB_PATH) < max(_mtime(XLSX_PATH), _mtime(CITATIONS_CSV))
-    if args.skip_resolve:
-        print("\n[Step 3] Skipped.")
-    elif not args.force and not bib_stale:
-        print("\n[Step 3] Auto-skipped — orig.bib is newer than xlsx and citations.csv.")
-    else:
+    print("\n[Step 3] Resolving BibTeX entries")
+    if _should_run("resolve", args.skip_resolve):
         n_upgraded, n_appended, n_still_arxiv, not_found = step3_resolve(args.dry_run)
+        if not args.dry_run:
+            state.mark_done("resolve", STEP_INPUTS["resolve"])
+            state.save()
 
-    # Step 4 — build wzmn.bib; auto-skip if it is newer than both inputs
-    wzmn_stale = _mtime(WZMN_BIB) < max(_mtime(BIB_PATH), _mtime(XLSX_PATH))
-    if args.skip_publications:
-        print("\n[Step 4] Skipped.")
-    elif not args.force and not wzmn_stale:
-        print("\n[Step 4] Auto-skipped — wzmn.bib is newer than orig.bib and xlsx.")
-    else:
+    print("\n[Step 4] Building the bibliography")
+    if _should_run("build_bib", args.skip_publications):
         cats = step4_build_bib(args.dry_run)
+        if not args.dry_run:
+            state.mark_done("build_bib", STEP_INPUTS["build_bib"])
+            state.save()
 
-    # Step 5 — rebuild overleaf/main.tex; auto-skip if it is newer than wzmn.bib
-    tex_stale = _mtime(TEX_PATH) < _mtime(WZMN_BIB)
-    if args.skip_tex:
-        print("\n[Step 5] Skipped.")
-    elif not args.force and not tex_stale:
-        print("\n[Step 5] Auto-skipped — overleaf/main.tex is newer than wzmn.bib.")
-    else:
+    print("\n[Step 5] Rebuilding overleaf/main.tex")
+    if _should_run("rebuild_tex", args.skip_tex):
         step5_rebuild_tex(args.dry_run, cats)
+        if not args.dry_run:
+            state.mark_done("rebuild_tex", STEP_INPUTS["rebuild_tex"])
+            state.save()
 
-    # Step 6 — commit + push to origin and overleaf
+    step6_worklist(args.dry_run)
+
+    # Step 7 — commit + push to origin and overleaf
+    push_ok = True
     if args.no_push:
-        print("\n[Step 6] Skipped (--no-push).")
+        print("\n[Step 7] Skipped (--no-push).")
     else:
-        step6_push(args.dry_run)
+        push_ok = step7_push(args.dry_run)
 
     print("\n" + "═" * 52)
-    print(f"  Step 2: {n_added} new paper(s) added to xlsx")
+    print(f"  Step 2: {n_added} new paper(s) added to the publications table")
     print(f"  Step 3: {n_upgraded} arXiv → published  |  "
           f"{n_appended} new entries appended  |  "
           f"{n_still_arxiv} still arXiv")
     if not_found:
-        print(f"\n  WARNING: {len(not_found)} paper(s) need manual bib lookup:")
+        print(f"\n  {len(not_found)} paper(s) need a manual bib lookup "
+              f"(also listed in WORKLIST.md):")
         for title, key in not_found:
             print(f"    [{key}] {title}")
     print("═" * 52)
 
+    # A silent failure in an unattended run is the failure mode that matters:
+    # the CV keeps looking current while going stale. Exit non-zero so launchd,
+    # cron or Actions notices, and notify on the way out.
+    if not push_ok:
+        notify.failure(
+            "Publications pipeline could not push.",
+            "Generated files are correct on disk but GitHub and/or Overleaf are "
+            "not updated. Re-run `python update.py --skip-fetch` after fixing the "
+            "remote.",
+            enabled=not args.no_notify,
+        )
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - top-level guard for unattended runs
+        notify.failure(f"{type(exc).__name__}: {exc}")
+        raise

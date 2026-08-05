@@ -1,0 +1,162 @@
+# Venue metadata. This replaces three dicts that used to be hardcoded in
+# build_bib.py (JOURNALS, CONFERENCES, VENUE_DESCRIPTIONS), where impact factors
+# and rankings went stale invisibly -- when this file was created, four of the
+# eleven Google Scholar rankings were wrong: EMNLP and NAACL both claimed to be
+# 1st (they are 2nd and 3rd), CoNLL claimed 11th (it is 19th) and LREC claimed
+# 6th (it is 7th).
+#
+# Refresh the numbers with:
+#
+#     python scripts/refresh_venues.py            # both sources
+#     python scripts/refresh_venues.py --dry-run  # show what would change
+#
+# `description` is the sentence the CV prints for the venue. It is regenerated
+# from `metrics` unless `manual: true`, which protects prose you wrote yourself.
+# `metrics` is always machine-owned -- do not hand-edit it.
+#
+# `kind` decides which CV section the paper lands in: journal or conference.
+
+scholar_metrics:
+  # Google Scholar's own ranked top-20 lists, which is where the "Nth of 20"
+  # phrasing comes from. The label is used in the generated sentence.
+  categories:
+    eng_computationallinguistics: computational linguistics
+    eng_artificialintelligence: artificial intelligence
+
+aliases:
+  # A raw venue string that needs more than the default simplification (lowercase,
+  # then truncate at the first digit, dash, caret, asterisk or paren).
+  cloud:
+    all_of: ["conference on cloud computing", "ieee"]
+
+venues:
+  # ── Conferences, ranked by Google Scholar ───────────────────────────────────
+  acl:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: Meeting of the Association for Computational Linguistics (ACL)
+    description: 1st of 20 in computational linguistics conferences by Google Scholar
+
+  emnlp:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: Conference on Empirical Methods in Natural Language Processing (EMNLP)
+    description: 2nd of 20 in computational linguistics conferences by Google Scholar
+
+  naacl:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: "Conference of the North American Chapter of the Association for Computational Linguistics: Human Language Technologies (HLT-NAACL)"
+    description: 3rd of 20 in computational linguistics conferences by Google Scholar
+
+  coling:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: International Conference on Computational Linguistics (COLING)
+    description: 5th of 20 in computational linguistics conferences by Google Scholar
+
+  eacl:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: Conference of the European Chapter of the Association for Computational Linguistics (EACL)
+    description: 6th of 20 in computational linguistics conferences by Google Scholar
+
+  lrec:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: International Conference on Language Resources and Evaluation (LREC)
+    description: 7th of 20 in computational linguistics conferences by Google Scholar
+
+  conll:
+    kind: conference
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: Conference on Computational Natural Language Learning (CoNLL)
+    description: 19th of 20 in computational linguistics conferences by Google Scholar
+
+  neurips:
+    kind: conference
+    scholar_metrics:
+      category: eng_artificialintelligence
+      name: Neural Information Processing Systems
+    description: 1st of 20 in artificial intelligence conferences by Google Scholar
+
+  iclr:
+    kind: conference
+    scholar_metrics:
+      category: eng_artificialintelligence
+      name: International Conference on Learning Representations
+    description: 2nd of 20 in artificial intelligence conferences by Google Scholar
+
+  icml:
+    kind: conference
+    scholar_metrics:
+      category: eng_artificialintelligence
+      name: International Conference on Machine Learning
+    description: 3rd of 20 in artificial intelligence conferences by Google Scholar
+
+  aaai:
+    kind: conference
+    scholar_metrics:
+      category: eng_artificialintelligence
+      name: AAAI Conference on Artificial Intelligence
+    description: 4th of 20 in artificial intelligence conferences by Google Scholar
+
+  # ── Journals ────────────────────────────────────────────────────────────────
+  tacl:
+    kind: journal
+    scholar_metrics:
+      category: eng_computationallinguistics
+      name: Transactions of the Association for Computational Linguistics
+    openalex:
+      search: Transactions of the Association for Computational Linguistics
+    description: 4th of 20 in computational linguistics venues by Google Scholar
+
+  # Prose below is hand-written judgement rather than a lookup, so it is marked
+  # manual and the refresher will only ever update its `metrics` block.
+  jml:
+    kind: journal
+    manual: true
+    openalex:
+      search: Journal of Memory and Language
+    description: Top Linguistic journal with an impact factor 4.014
+
+  nature:
+    kind: journal
+    manual: true
+    openalex:
+      search: Nature
+    description: The top venue in the world under many metrics, with an impact factor of 50.5
+
+  nature machine intelligence:
+    kind: journal
+    manual: true
+    openalex:
+      search: Nature Machine Intelligence
+    description: Journal with an 18.8 impact factor, higher than the top journals and conferences in Main Machine Learning venues.
+
+  tmlr:
+    kind: journal
+    manual: true
+    openalex:
+      search: Transactions on Machine Learning Research
+    description: New journal, but with many top-tier papers and a very competitive acceptance rate.
+
+  cloud:
+    kind: journal
+    manual: true
+    openalex:
+      search: IEEE Transactions on Cloud Computing
+    description: IEEE Transactions on Cloud Computing, impact factor 5.3
+
+  # ── Venues with no ranking to look up ───────────────────────────────────────
+  colm:
+    kind: conference
+    manual: true
+    description: New conference, but with many top-tier papers and a very competitive acceptance rate.

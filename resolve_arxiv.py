@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""Resolve arXiv BibTeX entries to published versions.
+"""Resolve arXiv BibTeX entries to their published versions.
 
-For each arXiv entry in orig.bib, and each entry in Contributions_table.xlsx
-with no BibTeX key, fetches the best available BibTeX:
-  1. DBLP title search  →  published @inproceedings/@article if indexed
-  2. S2 externalIds     →  ACL Anthology or OpenReview BibTeX
-  3. DBLP CoRR entry    →  clean arXiv BibTeX as fallback
-  4. arXiv export API   →  last resort if DBLP has no entry at all
+For each arXiv entry in orig.bib, and each publications-table row with no entry
+yet, fetch the best available BibTeX. Sources in descending preference:
+
+  1. DBLP title search   published @inproceedings/@article, gated on a 0.72
+                         title-similarity check so DBLP returning a different
+                         paper cannot overwrite a good entry
+  2. S2 externalIds      the ACL Anthology or OpenReview record. Also the
+                         identifier crosswalk -- one response carries ArXiv,
+                         DOI, ACL, DBLP and CorpusId together
+  3. DOI via clibib      optional, identifier-only. Covers DOI-bearing records
+                         that DBLP and the ACL Anthology do not index
+                         (journals, book chapters). Never used for title search
+  4. DBLP CoRR entry     a clean arXiv entry, as a fallback
+  5. arXiv abstract page last resort
+
+Only sources in `_PUBLISHED_SOURCES` may *replace* an existing entry; an
+arXiv-derived result never does, since that would downgrade a published paper
+back to a preprint.
 
 Usage:
     python resolve_arxiv.py [--bib orig.bib] [--output resolved.bib] [--skip-missing]
 
-Dependencies: beautifulsoup4 (already in requirements.txt), curl
+Dependencies: beautifulsoup4, curl. Optionally clibib, for the DOI path.
 """
 
 import argparse
@@ -28,7 +40,8 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
-from bib_utils import parse_bibtex, read_df
+from bib_utils import normalize_text, parse_bibtex, read_df
+from identity import harvest_ids_from_bibtex, harvest_ids_from_s2
 
 DEFAULT_BIB    = os.path.join(FILE_DIR, "orig.bib")
 DEFAULT_OUTPUT = os.path.join(FILE_DIR, "resolved.bib")
@@ -287,6 +300,54 @@ def fetch_openreview_bib(forum_id: str, original_key: str) -> str | None:
     )
 
 
+# ── clibib (optional) ─────────────────────────────────────────────────────────
+#
+# https://github.com/delip/clibib -- a client for a Zotero translation server,
+# used here for ONE thing: turning a known DOI into BibTeX. That fills a real gap,
+# since this module has no DOI resolver, and DOI-only records (journals, book
+# chapters, anything outside DBLP and the ACL Anthology) are most of what is left
+# unresolved.
+#
+# Deliberately never used for title search. Measured against this repo's own
+# unresolved papers, clibib's title lookup returned a confidently wrong paper 2
+# times in 5 -- "Reinforcement learning with large action spaces for neural
+# machine translation" came back as an unrelated Springer proceedings volume, and
+# "Every eval ever: Toward a common language for ai eval reporting" came back as
+# "A Common Language for Reporting Earthquake Intensities". Neither raised. A
+# silent wrong entry in a CV is worse than a missing one, and clibib's own README
+# says to prefer identifiers. Its identifier paths are exact and fast.
+#
+# Optional: absent clibib, this degrades to the arXiv fallback as before.
+
+_CLIBIB_STATE = {"checked": False, "fn": None}
+
+
+def _clibib_fetch():
+    """Return clibib's fetch_bibtex, or None when it is not installed."""
+    if not _CLIBIB_STATE["checked"]:
+        _CLIBIB_STATE["checked"] = True
+        try:
+            from clibib.api import fetch_bibtex
+            _CLIBIB_STATE["fn"] = fetch_bibtex
+        except Exception:
+            _CLIBIB_STATE["fn"] = None
+    return _CLIBIB_STATE["fn"]
+
+
+def fetch_by_doi(doi: str, original_key: str) -> str | None:
+    """Resolve a DOI to BibTeX via clibib. Returns None on any failure."""
+    fetch = _clibib_fetch()
+    if not fetch or not doi:
+        return None
+    try:
+        bib = fetch(doi)
+    except Exception:
+        return None
+    if not bib or not bib.strip().startswith("@"):
+        return None
+    return _replace_key(bib.strip(), original_key)
+
+
 # ── arXiv fallback ────────────────────────────────────────────────────────────
 
 def fetch_arxiv_bib(arxiv_id: str, original_key: str) -> str:
@@ -345,14 +406,38 @@ def _bare_arxiv_bib(arxiv_id: str, key: str) -> str:
 # ── Core resolver ─────────────────────────────────────────────────────────────
 
 def resolve(title: str, arxiv_id: str | None, original_key: str,
-            existing_content: str = "") -> tuple[str, str]:
-    """Return (bibtex_string, source_label)."""
+            existing_content: str = "", store=None) -> tuple[str, str]:
+    """Return (bibtex_string, source_label).
+
+    When `store` is an IdentityStore, every identifier seen along the way is
+    recorded against `original_key`. Semantic Scholar's `externalIds` is the
+    valuable one: it returns ArXiv, DOI, ACL, DBLP and CorpusId for one paper in
+    a single response, which is the crosswalk for the case where the ACL record
+    knows no arXiv ID and the arXiv record knows no ACL ID. Recording it means
+    later runs match on an identifier instead of guessing from a title.
+    """
     corr_bib = None
+
+    def _remember(**ids):
+        if store is not None:
+            store.record(original_key, title=title or None, **ids)
+
+    if arxiv_id:
+        _remember(arxiv=arxiv_id)
+
+    # A title search on a blank or placeholder title returns an unrelated paper,
+    # and a match would then overwrite a good entry. Prefer the arXiv fallback.
+    title = (title or "").strip()
+    if len(normalize_text(title)) < 10:
+        if arxiv_id:
+            return fetch_arxiv_bib(arxiv_id, original_key), "arXiv (no usable title)"
+        return "", "no usable title"
 
     # Step 1 — DBLP title search
     dblp_results = search_dblp(title)
     published_bib, corr_bib = pick_published(dblp_results, query_title=title)
     if published_bib:
+        _remember(**harvest_ids_from_bibtex(published_bib))
         return _replace_key(published_bib, original_key), "DBLP"
     time.sleep(1.0)
 
@@ -367,6 +452,8 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
 
     if s2_data:
         ext = s2_data.get("externalIds") or {}
+        # The crosswalk: one response binds every identifier this paper has.
+        _remember(**harvest_ids_from_s2(s2_data))
 
         # ACL Anthology
         acl_id = ext.get("ACL")
@@ -390,6 +477,22 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         if bib:
             return bib, "OpenReview"
 
+    # Step 2b — a DOI we already know about, resolved through clibib. Only ever
+    # by identifier, never by title. The DOI may have come from S2's externalIds
+    # above, from the existing bib entry, or from a previous run's harvest.
+    known_doi = ""
+    if s2_data:
+        known_doi = (s2_data.get("externalIds") or {}).get("DOI") or ""
+    if not known_doi:
+        known_doi = harvest_ids_from_bibtex(existing_content).get("doi", "")
+    if not known_doi and store is not None:
+        known_doi = (store.records.get(original_key) or {}).get("doi") or ""
+    if known_doi:
+        bib = fetch_by_doi(known_doi, original_key)
+        if bib:
+            _remember(doi=known_doi)
+            return bib, "DOI (clibib)"
+
     # Step 3 — arXiv fallback
     if corr_bib:
         return _replace_key(corr_bib, original_key), "arXiv (DBLP/CoRR)"
@@ -401,7 +504,10 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
 
 # ── In-place bib update ───────────────────────────────────────────────────────
 
-_PUBLISHED_SOURCES = {"DBLP", "ACL Anthology", "OpenReview"}
+# Sources trusted enough to *replace* an existing orig.bib entry. An arXiv-derived
+# result never replaces anything -- it would downgrade a published entry back to a
+# preprint. "DOI (clibib)" qualifies because a DOI is an exact identifier.
+_PUBLISHED_SOURCES = {"DBLP", "ACL Anthology", "OpenReview", "DOI (clibib)"}
 
 
 def gen_key(authors: str, year: str, title: str) -> str:
@@ -450,27 +556,58 @@ def get_arxiv_entries(bib_text: str) -> list[dict]:
     return [e for e in parse_bibtex(bib_text) if _is_arxiv(e)]
 
 
-def get_missing_bib_entries(bib_text: str) -> list[dict]:
-    """xlsx rows whose Bib key is absent from orig.bib."""
-    try:
-        df = read_df()
-    except Exception as exc:
-        print(f"Warning: could not read Contributions_table.xlsx: {exc}", file=sys.stderr)
-        return []
+def placeholder_key(year: str, title: str) -> str:
+    """Key for a paper with no known first author, so gen_key cannot apply."""
+    return f"unknown{year}{normalize_text(title)[:10]}"
+
+
+def get_missing_bib_entries(bib_text: str, df=None) -> list[dict]:
+    """Publications-table rows that have no usable entry in orig.bib.
+
+    A row is missing when its Bib cell is empty, or names a key that orig.bib
+    does not contain. The returned `item_name` is the key the entry will be
+    filed under: an existing hand-assigned key is always preserved, otherwise
+    one is generated from author/year/title.
+
+    This is the single implementation. `update.py` previously carried a second,
+    near-identical copy that generated keys differently -- so the same row could
+    be filed under two different keys depending on which caller ran.
+    """
+    if df is None:
+        try:
+            df = read_df()
+        except Exception as exc:
+            print(f"Warning: could not read the publications table: {exc}", file=sys.stderr)
+            return []
     existing_keys = {e["item_name"] for e in parse_bibtex(bib_text)}
     missing = []
     for _, row in df.iterrows():
-        bib_key = str(row.get("Bib", "")).strip()
-        name = str(row.get("Name", "")).strip()
+        name = str(row.get("Name", "") or "").strip()
         if not name:
             continue
-        if not bib_key or bib_key.lower() in ("nan", "none") or bib_key not in existing_keys:
-            safe_key = bib_key if bib_key and bib_key.lower() not in ("nan", "none") else ""
-            missing.append({
-                "item_name": safe_key or f"_missing_{re.sub(r'[^A-Za-z0-9]', '', name)[:30]}",
-                "title": name,
-                "content": "",
-            })
+        bib_key = str(row.get("Bib", "") or "").strip()
+        if bib_key.lower() in ("nan", "none"):
+            bib_key = ""
+        if bib_key and bib_key in existing_keys:
+            continue
+
+        authors = str(row.get("Authors", "") or "").strip()
+        if authors.lower() == "nan":
+            authors = ""
+        try:
+            year = str(int(row.get("year", 0) or 0))
+        except (TypeError, ValueError):
+            year = str(row.get("year", "") or "").strip()
+
+        if bib_key:
+            key = bib_key           # set by hand but not yet resolved; keep it
+        elif authors:
+            key = gen_key(authors, year, name)
+        else:
+            key = placeholder_key(year, name)
+
+        missing.append({"item_name": key, "title": name, "authors": authors,
+                        "year": year, "content": ""})
     return missing
 
 

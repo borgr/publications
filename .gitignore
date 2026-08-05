@@ -1,6 +1,22 @@
 __pycache__/
 *.pyc
+.pytest_cache/
 .DS_Store
+# Excel lock files, created while the table is open in Excel.
 ~$*
 tmp.csv
-wzmn.bib
+# Atomic-write temporaries; a crash mid-write can leave one behind.
+*.tmp
+
+# `wzmn.bib` used to be listed here. It matched nothing -- the build output is
+# overleaf/Wzmn.bib, inside the submodule, which this file does not govern --
+# but with core.ignorecase=true on macOS it would have silently ignored a
+# root-level Wzmn.bib if the output ever moved back.
+
+# Deliberately NOT ignored, though they are generated:
+#   identity.json         harvested identifiers. Losing it means re-resolving
+#                         every paper and re-confirming every fuzzy match.
+#   resolve_attempts.json retry counts, so a fresh clone does not restart the
+#                         backoff for entries that have failed many times.
+#   .pipeline_state.json  input hashes that drive the step auto-skip.
+#   WORKLIST.md           so open items are browsable on GitHub.

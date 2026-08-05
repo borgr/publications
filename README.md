@@ -1,132 +1,193 @@
 # Publications Pipeline
 
-Automated pipeline for maintaining a publications CV on Overleaf, backed by Google Scholar.
-
-## How it works
+Keeps a publications CV on Overleaf in sync with Google Scholar, from one
+command. Designed to be re-run for years with as little manual work as possible:
+every step is idempotent, anything the pipeline cannot decide itself lands in
+[WORKLIST.md](WORKLIST.md), and a failure is never silent.
 
 ```
-Google Scholar
-      │
-      ▼
-fetch_citations.py  →  citations.csv
-                        profile_stats.json   (total citations, h-index)
-      │
-      ▼
-update.py (orchestrates all steps)
-      │
-      ├─ Step 2: Contributions_table.xlsx   (add new papers)
-      ├─ Step 3: orig.bib                   (resolve arXiv → published BibTeX)
-      ├─ Step 4: overleaf/Wzmn.bib          (build final bibliography)
-      ├─ Step 5: overleaf/main.tex          (update \nocite{} blocks + stats)
-      └─ Step 6: git push → GitHub + Overleaf
+Google Scholar ──► citations.csv ──┐
+                   profile_stats.json
+                                   ├──► orig.bib ──► overleaf/Wzmn.bib ──► overleaf/main.tex
+papers.csv ────────────────────────┤     (resolved)   (+ venue info,        (+ \nocite blocks,
+  (venue, tags, authorship)        │                   citation counts)      citations, h-index)
+venues.yaml ───────────────────────┘
+  (rankings, impact metrics)
 ```
-
-Running `python update.py` from this directory does everything end-to-end.  
-To only regenerate the bib and tex without fetching from Scholar, run `python rebuild_tex.py` directly.
-
-## Installation
-
-```bash
-# 1. Clone the repo including the Overleaf submodule
-git clone --recurse-submodules https://github.com/borgr/publications.git
-cd publications
-
-# If you already cloned without --recurse-submodules:
-git submodule update --init
-
-# 2. Install Python dependencies
-pip install -r requirements.txt
-```
-
-`curl` must be available in your PATH (used for Scholar scraping — avoids Python TLS fingerprinting).  
-`git` must be configured with credentials for both GitHub and Overleaf to enable the auto-push in step 6.
-
-## GitHub ↔ Overleaf
-
-The `overleaf/` directory is a **git submodule** pointing to the Overleaf project at  
-`https://git.overleaf.com/67d33c3cba890bd614b76e93`.
-
-- **GitHub** (`github.com/borgr/publications`) stores the pipeline code and the full history of all generated files including `overleaf/` as a submodule.
-- **Overleaf** receives pushes directly to `overleaf/main.tex` and `overleaf/Wzmn.bib` every time the pipeline runs.
-
-Changes made directly in the Overleaf editor can be pulled back with:
-```bash
-git -C overleaf pull origin
-```
-
-## Key files
-
-### Pipeline (Python)
-
-| File | Purpose |
-|------|---------|
-| `update.py` | Master script — runs all 6 steps, then commits and pushes |
-| `fetch_citations.py` | Scrapes Google Scholar → `citations.csv` + `profile_stats.json` |
-| `build_bib.py` | Reads `orig.bib` + `Contributions_table.xlsx` → `overleaf/Wzmn.bib` |
-| `rebuild_tex.py` | Updates `\nocite{}` blocks and citations/h-index in `overleaf/main.tex` |
-| `resolve_arxiv.py` | Resolves arXiv entries to published BibTeX via DBLP / ACL / S2 |
-| `bib_utils.py` | Shared utilities: `read_df()`, `parse_bibtex()`, `normalize_text()` |
-
-### Data
-
-| File | Purpose |
-|------|---------|
-| `Contributions_table.xlsx` | Source of truth: venue, authors, year, bib key, category flags per paper |
-| `orig.bib` | Raw BibTeX entries (manually curated + auto-resolved arXiv entries) |
-| `citations.csv` | Per-paper citation counts scraped from Scholar |
-| `profile_stats.json` | Total citations and h-index from Scholar profile |
-
-### Overleaf (`overleaf/`)
-
-| File | Purpose |
-|------|---------|
-| `main.tex` | The CV document — auto-updated by the pipeline |
-| `Wzmn.bib` | Generated bibliography — do not edit by hand |
-| `template.tex` | Documented starting point for adapting this setup |
-| `planyr-rev.bst` | Bibliography style (reverse chronological, highlights author name) |
 
 ## Usage
 
 ```bash
-# Full update (fetch Scholar, rebuild bib + tex, push to GitHub and Overleaf)
-python update.py
+python update.py                 # everything, end to end
+python update.py --dry-run       # show what would change; no writes, no network
+python update.py --force         # ignore the "inputs unchanged" checks
+python update.py --no-push       # build locally, do not touch the remotes
+python update.py --skip-fetch    # reuse the citation counts already on disk
 
-# Dry run — show what would change without writing anything
-python update.py --dry-run
-
-# Skip the Scholar fetch (use existing citations.csv)
-python update.py --skip-fetch
-
-# Run without pushing to git remotes
-python update.py --no-push
-
-# Force all steps even if outputs are already up to date
-python update.py --force
+python scripts/worklist.py       # regenerate WORKLIST.md on its own
+python scripts/refresh_venues.py # refresh venue rankings and impact metrics
+python -m pytest tests/ -q       # the test suite
 ```
 
-## Using this for your own publications
+`update.py` exits non-zero if anything failed, and posts a desktop notification
+(`--no-notify` to suppress), so an unattended run cannot fail quietly while the
+CV keeps looking current.
 
-Run the reset script to wipe all personal data and start fresh:
+### Steps
+
+Each step is skipped when the **contents** of its inputs are unchanged since it
+last succeeded, recorded in `.pipeline_state.json`. Content hashing rather than
+mtimes, so a fresh clone behaves correctly and a no-op rewrite does not cascade.
+
+| # | Step | What it does |
+|---|------|--------------|
+| 1 | fetch | Scrapes the Scholar profile → `citations.csv`, `profile_stats.json`. Time-based (`--fetch-age`, default 24h). |
+| 2 | new papers | Adds anything in Scholar but not in `papers.csv`. |
+| 3 | resolve | Upgrades arXiv entries in `orig.bib` to their published version, and looks up rows with no entry. |
+| 4 | build | `orig.bib` + `papers.csv` + `venues.yaml` → `overleaf/Wzmn.bib`. |
+| 5 | tex | Updates `\nocite{}` blocks, total citations and h-index in `overleaf/main.tex`. |
+| 6 | worklist | Regenerates `WORKLIST.md`. |
+| 7 | push | Commits and pushes to GitHub and Overleaf, rebasing first if a remote moved. |
+
+## Scheduling
+
+Split deliberately, because Scholar blocks datacenter IP ranges — a hosted
+runner gets a CAPTCHA, not data:
 
 ```bash
-# Without your own Overleaf project yet (instructions printed at the end)
-python init_new_author.py
-
-# With your Overleaf git URL (swaps the submodule automatically)
-python init_new_author.py --overleaf-url https://git.overleaf.com/<your-project-id>
+python scripts/install_schedule.py          # weekly local run (macOS launchd)
+python scripts/install_schedule.py --show   # print the plist / cron line instead
+python scripts/install_schedule.py --uninstall
 ```
 
-Then:
-1. **Edit `config.py`** — set `AUTHOR_NAME` and `SCHOLAR_USER_ID`. The pipeline propagates the name into the BST files and `main.tex` on every run.
-2. **Run `python rebuild_tex.py`** — generates initial `Wzmn.bib` and `main.tex`.
-3. **Run `python update.py`** — fetches from Scholar and pushes to Overleaf.
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) covers what does not need
+Scholar: the test suite on two Python versions, a rebuild from committed data, a
+determinism check, and a failure if the table has duplicate rows or an ambiguous
+citation join. It needs no secrets and works in a fork.
 
-## Citation count display
+## Files
 
-Each bib entry in `Wzmn.bib` includes a `citations={N}` field.  
-The BST emits `\bibcitecount{N}` for each entry. Toggle display in `main.tex`:
+### Data you edit
+
+| File | Purpose |
+|------|---------|
+| `papers.csv` | **Source of truth.** One row per paper: venue, authors, year, BibTeX key, and the tag flags that drive CV sections. Opens in Excel/Numbers/LibreOffice. |
+| `venues.yaml` | Venue rankings, impact metrics and the sentence each venue prints. `manual: true` protects prose from the refresher. |
+| `config.py` | Author name and Scholar user ID. The only file to change when forking. |
+| `orig.bib` | Curated BibTeX. Mostly maintained by step 3; hand-edit for anything it cannot resolve. |
+
+### Data the pipeline owns
+
+Generated but **committed**, because each one is expensive to rebuild or useful
+to browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
+identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
+`WORKLIST.md`, `overleaf/Wzmn.bib`.
+
+### Code
+
+| File | Purpose |
+|------|---------|
+| `update.py` | The 7-step orchestrator. |
+| `fetch_citations.py` | Scholar scraper, including each paper's stable `citation_for_view` ID. |
+| `table_io.py` | Reads/validates/writes `papers.csv`; addresses columns by name. |
+| `identity.py` | Stable identifiers, and the citation join built on them. |
+| `citations_io.py` | `citations.csv` reading and writing. |
+| `resolve_arxiv.py` | arXiv → published BibTeX, via DBLP / S2 / ACL / OpenReview / DOI. |
+| `build_bib.py` | Builds `Wzmn.bib` and assigns each paper to a CV section. |
+| `rebuild_tex.py` | Updates `main.tex` in place. |
+| `venues.py` | Loads `venues.yaml`. |
+| `pipeline_state.py` | Content-hash step skipping. |
+| `bib_utils.py` | Brace-counting BibTeX parser and text normalization. |
+| `notify.py` | Failure notification (macOS Notification Center, GitHub Actions annotation). |
+| `papers_fig.py`, `papers_graph.py` | Standalone figures. Not part of the pipeline; needs `requirements-figures.txt`. |
+
+## How papers are matched across sources
+
+Titles are not stable: BibTeX braces capitalization (`{B}aby{LM}`), Scholar
+lowercases subtitles, papers get retitled between preprint and publication, and
+the table is typed by hand. So matching is by **identifier**, and titles are only
+a bootstrap:
+
+1. **Stable ID.** Scholar's `citation_for_view` per paper; `externalIds` from
+   Semantic Scholar for ArXiv/DOI/ACL/DBLP together — which is the crosswalk for
+   when the ACL record knows no arXiv ID and vice versa. Stored in
+   `identity.json` the first time it is seen.
+2. **Normalized title.** Case, punctuation and BibTeX braces stripped. An
+   identity claim, not a guess.
+3. **Fuzzy title,** ≥0.90 automatically, ≥0.75 with confirmation, and only when
+   it beats the runner-up by a clear margin. Every fuzzy match is listed in
+   `WORKLIST.md`; confirming one and re-fetching binds its ID, after which it
+   never needs judging again.
+
+Anything ambiguous is reported, never guessed.
+
+## GitHub ↔ Overleaf
+
+`overleaf/` is a git submodule pointing at the Overleaf project. Step 7 pushes
+`main.tex` and `Wzmn.bib` there, then pushes this repo to GitHub. If the Overleaf
+remote has moved — because you edited the project in Overleaf's own editor — the
+push rebases onto it and retries, so that no longer needs a manual pull.
+
+Pull Overleaf-side edits back with `git -C overleaf pull origin`.
+
+## Optional: clibib for the tail
+
+[clibib](https://github.com/delip/clibib) resolves an identifier to BibTeX
+through a Zotero translation server. `pip install clibib` and step 3 will use it
+for **DOIs**, covering journals and book chapters that DBLP and the ACL Anthology
+do not index. Without it the pipeline behaves exactly as before.
+
+It is deliberately never used for title search. Measured against this repo's own
+unresolved papers, its free-text lookup returned a confidently wrong paper 2
+times in 5 with no error raised — "Reinforcement learning with large action
+spaces for neural machine translation" came back as an unrelated Springer
+proceedings volume. Its identifier paths are exact and fast, and its own README
+recommends preferring them.
+
+As a manual helper it is genuinely useful for `WORKLIST.md` items where you have
+a DOI, ISBN, arXiv ID or publisher URL:
+
+```bash
+clibib 10.1038/s41586-021-03215-w
+```
+
+## Citation counts in the CV
+
+Each entry in `Wzmn.bib` carries a `citations={N}` field, which the BST emits as
+`\bibcitecount{N}`. Toggle display in `main.tex`:
 
 ```latex
 %\newcommand{\bibcitecount}[1]{ \textit{\small[#1 cited]}}  % show
 \newcommand{\bibcitecount}[1]{}                              % hide (default)
 ```
+
+## Forking this for your own publications
+
+```bash
+git clone --recurse-submodules https://github.com/borgr/publications.git
+cd publications
+pip install -r requirements.txt
+
+python init_new_author.py --overleaf-url https://git.overleaf.com/<your-project-id>
+```
+
+Then set `AUTHOR_NAME` and `SCHOLAR_USER_ID` in `config.py` — the pipeline
+propagates the name into the BST files and `main.tex` on every run — and run
+`python update.py`. Nothing else is author-specific.
+
+`curl` and `git` must be on your PATH.
+
+## Migrating from the spreadsheet
+
+`papers.csv` replaced `Contributions_table.xlsx`. If you have an unmigrated
+checkout, `read_table()` still falls back to the xlsx, and:
+
+```bash
+python scripts/migrate_to_csv.py --dry-run
+python scripts/migrate_to_csv.py
+```
+
+converts it, verifying every value round-trips and reporting anything suspect.
+CSV keeps the spreadsheet workflow while being diffable in git — which matters
+because in the binary file six columns had rotted to empty unnoticed, one of them
+(`inter\eval`) feeding a CV tag that consequently never rendered.

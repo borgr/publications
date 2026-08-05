@@ -1,0 +1,97 @@
+name: pipeline
+
+# Deliberately does NOT scrape Google Scholar. Scholar blocks datacenter IP
+# ranges, so a hosted runner reliably gets a CAPTCHA rather than data -- a
+# scheduled cloud fetch would fail every week and train you to ignore it. The
+# fetch belongs on your own machine (see launchd/ in this repo); CI's job is to
+# prove that the code and the committed data still produce the right output.
+#
+# Everything here works in a fork with no secrets configured.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  schedule:
+    # Weekly, so bit-rot in a dependency surfaces even with no commits.
+    # 07:23 Monday, off the hour to avoid the scheduling stampede.
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is what the code actually requires (str | None unions,
+        # the walrus in pipeline_state); the ceiling catches upcoming breakage.
+        python-version: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The Overleaf submodule is a private remote; CI neither needs nor can
+          # reach it, and the offline rebuild is checked against a temp copy.
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Tests
+        run: python -m pytest tests/ -q
+
+  rebuild:
+    # Proves the committed data still builds, and that rebuilding is
+    # deterministic -- the bibliography must not change just because it ran again.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Rebuild the bibliography from committed data
+        run: |
+          mkdir -p overleaf
+          python build_bib.py | tee build.log
+
+      - name: Fail if the build reported a data problem
+        run: |
+          # Duplicate rows and ambiguous joins are surfaced as warnings by
+          # build_bib; in CI they are worth failing on, because they mean the
+          # committed table cannot produce one unambiguous CV.
+          if grep -qE "^(Warning: [0-9]+ table rows are the same paper|AMBIGUOUS)" build.log; then
+            echo "::error title=Publications data::The table has duplicate rows or an ambiguous citation join. See WORKLIST.md."
+            grep -E "^(Warning|AMBIGUOUS)" build.log || true
+            exit 1
+          fi
+
+      - name: Rebuild is deterministic
+        run: |
+          cp overleaf/Wzmn.bib /tmp/first.bib
+          python build_bib.py > /dev/null
+          diff /tmp/first.bib overleaf/Wzmn.bib \
+            || { echo "::error::Two consecutive builds differ — the output is not deterministic."; exit 1; }
+
+      - name: Worklist is current
+        run: |
+          python scripts/worklist.py --quiet || true
+          if ! git diff --quiet -- WORKLIST.md; then
+            echo "::warning title=WORKLIST.md is stale::Regenerate with 'python scripts/worklist.py' and commit."
+            git --no-pager diff -- WORKLIST.md | head -60
+          fi
