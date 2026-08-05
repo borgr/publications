@@ -431,6 +431,97 @@ def gen_key(authors: str, year: str, title: str) -> str:
     return f"{last}{year}{word}"
 
 
+def split_entry(bibtex: str) -> tuple[str, str, list[tuple[str, str, str]]]:
+    """(entry_type, key, [(field, raw_value, raw_source)]).
+
+    `raw_value` keeps its braces or quotes; `raw_source` is the field exactly as it
+    was written, leading whitespace and all, so a field nothing touches can be emitted
+    back byte-for-byte instead of reformatted.
+    """
+    m = re.match(r'\s*@(\w+)\s*\{\s*([^,]+),', bibtex)
+    if not m:
+        return "", "", []
+    i, fields = m.end(), []
+    while i < len(bibtex):
+        fm = re.compile(r'\s*([A-Za-z][\w-]*)\s*=\s*').match(bibtex, i)
+        if not fm:
+            break
+        i, start = fm.end(), fm.end()
+        if bibtex[i] == "{":
+            depth = 0
+            while i < len(bibtex):
+                if bibtex[i] == "{":
+                    depth += 1
+                elif bibtex[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+        elif bibtex[i] == '"':
+            i = bibtex.find('"', i + 1) + 1 or len(bibtex)
+        else:
+            while i < len(bibtex) and bibtex[i] not in ",}\n":
+                i += 1
+        fields.append((fm.group(1).lower(), bibtex[start:i], bibtex[fm.start():i]))
+        j = bibtex.find(",", i)
+        if j < 0:
+            break
+        i = j + 1
+    return m.group(1), m.group(2).strip(), fields
+
+
+# The venue is what resolving an entry is *for*, and it is the only thing that moves.
+# Everything else in the entry belongs to the bibliography: `pretitle` is a private
+# categorization macro that exists nowhere else, and `title`/`author` are hand-repaired
+# here -- DBLP's Holmes title is `\texttt{Holmes} {\unicode{8981}} ...`, which does not
+# compile and is not what the paper is called. `eprint`/`archiveprefix` stay too: the
+# arXiv id remains true after publication, and it is what downstream tools match on.
+_VENUE_FIELDS = ("journal", "booktitle", "volume", "number", "pages", "publisher",
+                 "series", "editor", "address", "month", "year", "doi", "url",
+                 "timestamp", "biburl", "bibsource")
+_CORR_VENUE = re.compile(r'^\{?\s*(corr\b|abs/|arxiv)', re.I)
+
+
+def merge_published(old_bib: str, new_bib: str) -> str:
+    """Move the venue across; leave every other field exactly as it was written.
+
+    Replacing the whole entry, which is what this used to do, silently deleted every
+    hand edit in it. Rebuilding the whole entry is nearly as bad in practice: it
+    re-indents forty lines to change three, and a bibliography is reviewed by hand.
+    """
+    _otype, key, old_fields = split_entry(old_bib)
+    ntype, _nkey, new_fields = split_entry(new_bib)
+    if not ntype or not new_fields:
+        return old_bib
+    new = {f: v for f, v, _ in new_fields if f in _VENUE_FIELDS}
+    cols = [len(f) + len(s) for f, s in
+            re.findall(r'\n\s*([A-Za-z][\w-]*)( *)=', old_bib)]
+    col = max(set(cols), key=cols.count) if cols else 0     # the column most lines use
+    col = max(col, max(len(f) for f in list(new) + [f for f, _, _ in old_fields]) + 1)
+    def fmt(f, v): return f"\n  {f.ljust(col)}= {v}"
+
+    out, seen, last_venue = [], set(), -1
+    for f, v, raw in old_fields:
+        if f in new:
+            out.append(fmt(f, new[f]) if new[f].strip() != v.strip() else raw)
+            seen.add(f)
+        elif f == "journal" and "booktitle" in new:
+            continue          # a paper is not both a journal article and a proceedings paper
+        elif f in ("journal", "volume") and _CORR_VENUE.match(v.strip()):
+            continue          # the preprint venue, with nothing in the record to replace it
+        else:
+            out.append(raw)
+        if f in _VENUE_FIELDS:
+            last_venue = len(out) - 1
+    # Venue fields the entry did not have -- pages and volume, usually -- go next to the
+    # ones it did, not at the end after DBLP's bookkeeping.
+    add = [fmt(f, v) for f, v, _ in new_fields if f in _VENUE_FIELDS and f not in seen]
+    at = last_venue + 1 if last_venue >= 0 else len(out)
+    out[at:at] = add
+    return f"@{ntype}{{{key}," + ",".join(out) + "\n}"
+
+
 def update_bib_inplace(
     bib_text: str,
     updates: list,   # list of (key, new_bibtex, source)
@@ -445,7 +536,13 @@ def update_bib_inplace(
             r'@\w+\s*\{' + re.escape(key) + r',.*?\r?\n\}',
             re.DOTALL,
         )
-        new_text, count = pattern.subn(new_bib.rstrip('\n'), bib_text, count=1)
+        old_m = pattern.search(bib_text)
+        if not old_m:
+            continue
+        merged = merge_published(old_m.group(0), new_bib)
+        if merged.strip() == old_m.group(0).strip():
+            continue
+        new_text, count = pattern.subn(lambda _m: merged, bib_text, count=1)
         if count:
             bib_text = new_text
             n_replaced += 1
@@ -499,6 +596,9 @@ def main() -> None:
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--skip-missing", action="store_true",
                         help="Only process arXiv entries; skip xlsx entries with no key")
+    parser.add_argument("--in-place", action="store_true",
+                        help="also write the published venues back into --bib "
+                             "(title, author and pretitle are left alone; diff it)")
     args = parser.parse_args()
 
     with open(args.bib) as f:
@@ -522,6 +622,7 @@ def main() -> None:
 
     resolved_bibs: list[str] = []
     report: list[tuple[str, str, bool]] = []
+    updates: list[tuple[str, str, str]] = []
 
     for entry in candidates:
         key = entry["item_name"]
@@ -538,6 +639,10 @@ def main() -> None:
         report.append((key, source, bool(bib)))
         if bib:
             resolved_bibs.append(bib)
+            # Only an entry that is still a preprint has anything to gain, and only a
+            # published record has anything to give.
+            if _is_corr(content) and not _is_corr(bib):
+                updates.append((key, bib, source))
         time.sleep(0.5)
 
     with open(args.output, "w") as f:
@@ -553,7 +658,17 @@ def main() -> None:
     print("─" * 72)
     written = sum(1 for _, _, ok in report if ok)
     print(f"\n{written}/{len(candidates)} entries written to {args.output}")
-    print("Review and copy desired entries into orig.bib manually.")
+
+    if not args.in_place:
+        print(f"{len(updates)} preprint entries have a published version. To write "
+              f"their venues into\n{os.path.basename(args.bib)} (leaving title, author "
+              f"and pretitle alone), rerun with --in-place.")
+        return
+    new_text, n_replaced, _ = update_bib_inplace(bib_text, updates, [])
+    if n_replaced:
+        with open(args.bib, "w") as f:
+            f.write(new_text)
+    print(f"{n_replaced} entries upgraded in place in {args.bib} -- `git diff` it.")
 
 
 if __name__ == "__main__":
