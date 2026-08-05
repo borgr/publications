@@ -480,6 +480,9 @@ def split_entry(bibtex: str) -> tuple[str, str, list[tuple[str, str, str]]]:
 _VENUE_FIELDS = ("journal", "booktitle", "volume", "number", "pages", "publisher",
                  "series", "editor", "address", "month", "year", "doi", "url",
                  "timestamp", "biburl", "bibsource")
+# DBLP's own bookkeeping. Still updated, but a new `pages` belongs next to `volume`,
+# not trailing after the record's provenance.
+_BOOKKEEPING = ("timestamp", "biburl", "bibsource")
 _CORR_VENUE = re.compile(r'^\{?\s*(corr\b|abs/|arxiv)', re.I)
 
 
@@ -512,7 +515,7 @@ def merge_published(old_bib: str, new_bib: str) -> str:
             continue          # the preprint venue, with nothing in the record to replace it
         else:
             out.append(raw)
-        if f in _VENUE_FIELDS:
+        if f in _VENUE_FIELDS and f not in _BOOKKEEPING:
             last_venue = len(out) - 1
     # Venue fields the entry did not have -- pages and volume, usually -- go next to the
     # ones it did, not at the end after DBLP's bookkeeping.
