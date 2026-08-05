@@ -124,8 +124,38 @@ def _simplify_title(t: str) -> str:
 
 
 def _dblp_title(bibtex: str) -> str:
-    m = re.search(r'\btitle\s*=\s*[{"]([^}"]+)', bibtex, re.IGNORECASE)
-    return m.group(1) if m else ""
+    """The full title value, brace groups included.
+
+    `[^}]+` stopped at the first closing brace, and DBLP protects capitals inside
+    titles almost everywhere -- `{A} Benchmark`, `Findings of the {B}aby{LM}`,
+    `\\texttt{Holmes}`. So the "title" this returned was often just the first few
+    words, which then failed pick_published's 0.72 similarity guard and threw away a
+    correctly-found published version: Holmes came back as `\\texttt{Holmes` and scored
+    0.16 against its own title, so the TACL entry was rejected and the paper stayed a
+    CoRR preprint in the bibliography even though DBLP had the journal version, with
+    volume, pages and DOI.
+    """
+    m = re.search(r'\btitle\s*=\s*', bibtex, re.IGNORECASE)
+    if not m or m.end() >= len(bibtex):
+        return ""
+    rest = bibtex[m.end():]
+    if rest[0] == '"':
+        end = rest.find('"', 1)
+        return rest[1:end] if end > 0 else ""
+    if rest[0] != "{":
+        return ""
+    depth, out = 0, []
+    for ch in rest:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        out.append(ch)
+    return "".join(out)
 
 
 def _is_corr(bibtex: str) -> bool:
@@ -155,11 +185,26 @@ def search_dblp(title: str) -> list[str]:
     return [e.strip() for e in entries if e.strip().startswith("@")]
 
 
-def pick_published(bibtex_list: list[str], query_title: str = "") -> tuple[str | None, str | None]:
+def _bib_year(bibtex: str) -> int | None:
+    m = re.search(r'\byear\s*=\s*\{?\s*(\d{4})', bibtex)
+    return int(m.group(1)) if m else None
+
+
+def pick_published(bibtex_list: list[str], query_title: str = "",
+                   query_year: int | None = None) -> tuple[str | None, str | None]:
     """Return (first_published, first_corr) from DBLP results.
 
     When query_title is given, published entries whose title similarity is below
     0.72 are skipped — this guards against DBLP returning a different paper.
+
+    The similarity alone is not enough, because difflib rewards a long common
+    subsequence no matter what the *extra* text is, and the extra text is often
+    exactly what distinguishes two papers: "Holistic Evaluation of Language Models"
+    scores 0.76 against "SEA-HELM: Southeast Asian Holistic Evaluation of Language
+    Models", which is a different paper three years later. So a merely-similar title
+    also has to agree on the year. Anything at 0.95 or above is treated as the same
+    title and keeps its publication lag — ComPEFT's journal version is two years after
+    its preprint and its title is identical.
     """
     published = corr = None
     for bib in bibtex_list:
@@ -175,6 +220,10 @@ def pick_published(bibtex_list: list[str], query_title: str = "") -> tuple[str |
                         _simplify_title(_dblp_title(bib)),
                     ).ratio()
                     if ratio < 0.72:
+                        continue
+                    y = _bib_year(bib)
+                    if (ratio < 0.95 and query_year and y
+                            and not 0 <= y - query_year <= 1):
                         continue
                 published = bib
     return published, corr
@@ -311,10 +360,14 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
             existing_content: str = "") -> tuple[str, str]:
     """Return (bibtex_string, source_label)."""
     corr_bib = None
+    year_m = re.search(r'\byear\s*=\s*\{?\s*(\d{4})', existing_content) \
+        or re.search(r'\b(20\d{2})\b', existing_content)
 
     # Step 1 — DBLP title search
     dblp_results = search_dblp(title)
-    published_bib, corr_bib = pick_published(dblp_results, query_title=title)
+    published_bib, corr_bib = pick_published(
+        dblp_results, query_title=title,
+        query_year=int(year_m.group(1)) if year_m else None)
     if published_bib:
         return _replace_key(published_bib, original_key), "DBLP"
     time.sleep(1.0)
@@ -324,7 +377,6 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     if arxiv_id:
         s2_data = query_s2_by_arxiv(arxiv_id)
     else:
-        year_m = re.search(r'\b(20\d{2})\b', existing_content)
         s2_data = query_s2_by_title(title, year_m.group(1) if year_m else "")
     time.sleep(1.5)
 
