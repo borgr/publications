@@ -75,6 +75,7 @@ git -C overleaf pull origin
 | `orig.bib` | Raw BibTeX entries (manually curated + auto-resolved arXiv entries) |
 | `citations.csv` | Per-paper citation counts scraped from Scholar |
 | `profile_stats.json` | Total citations and h-index from Scholar profile |
+| `enhanced.bib` | **Legacy — do not read.** An old snapshot of `build_bib.py`'s output from when it wrote here instead of `overleaf/Wzmn.bib`. Nothing regenerates it, so it drifts further behind every run. If you need the bibliography from outside this repo, read `orig.bib`. |
 
 ### Overleaf (`overleaf/`)
 
