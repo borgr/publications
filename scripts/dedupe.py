@@ -29,9 +29,62 @@ from bib_utils import (_entry_year, choose_published, is_preprint,  # noqa: E402
                        parse_bibtex, publication_rank)
 from identity import (IdentityStore, duplicate_groups_by_identifier,  # noqa: E402
                       find_duplicate_titles, normalize_title)
+from citations_io import read_citation_rows  # noqa: E402
+from identity import join_citations  # noqa: E402
 from table_io import read_table, write_table  # noqa: E402
 
 BIB_PATH = os.path.join(ROOT, "orig.bib")
+CITATIONS_CSV = os.path.join(ROOT, "citations.csv")
+
+
+def citation_effect(df, drop_names):
+    """What happens to citation counts if `drop_names` are removed.
+
+    Returns (carried, orphaned). A removed row may be the only title a Scholar
+    record matches, in which case its citations would land nowhere -- so the
+    merge is checked before it is made, rather than trusting that the survivor
+    happens to match too.
+
+    Where both rows match records, `join_citations` sums them, which is what
+    Scholar itself shows once the versions are merged.
+    """
+    rows = read_citation_rows(CITATIONS_CSV)
+    if not rows:
+        return {}, []
+    store = IdentityStore.load()
+    before = join_citations(rows, sorted(set(df["Name"].dropna())), store=store)
+    kept = df[~df["Name"].isin(drop_names)]
+    after = join_citations(rows, sorted(set(kept["Name"].dropna())), store=store)
+
+    total_before = sum(v for v in before.matched.values() if v)
+    total_after = sum(v for v in after.matched.values() if v)
+    orphaned = [(t, v) for t, v in after.unmatched
+                if (t, v) not in before.unmatched and v]
+    return {"before": total_before, "after": total_after}, orphaned
+
+
+def bind_dropped_scholar_ids(df, drops):
+    """Bind a dropped row's Scholar ID to the surviving paper's key.
+
+    Makes the merge permanent: the next fetch attributes that Scholar record to
+    the survivor by identifier, so its citations follow the merge even though the
+    title it was matched on no longer exists in the table.
+    """
+    rows = read_citation_rows(CITATIONS_CSV)
+    if not rows:
+        return 0
+    store = IdentityStore.load()
+    join = join_citations(rows, sorted(set(df["Name"].dropna())), store=store)
+    bound = 0
+    for (loser_name, _lk, _le), (_wn, winner_key, _we), _why in drops:
+        source = join.source.get(loser_name) or {}
+        scholar_id = str(source.get("scholar_id") or "").strip()
+        if scholar_id and winner_key:
+            store.record(winner_key, title=loser_name, scholar_id=scholar_id)
+            bound += 1
+    if bound:
+        store.save()
+    return bound
 
 
 def plan(df, bib_text):
@@ -129,6 +182,25 @@ def main():
         return 0
 
     drop_names = {loser[0] for loser, _, _ in drops}
+
+    totals, orphaned = citation_effect(df, drop_names)
+    if orphaned:
+        print(f"\nREFUSING to remove: {len(orphaned)} Scholar record(s) would "
+              f"lose their only matching row, and their citations with them:")
+        for title, value in orphaned:
+            print(f"    {value} citations — {title[:64]}")
+        print("  Give the surviving row a title these also match, or merge the "
+              "records in your Scholar profile first.")
+        return 1
+    if totals:
+        print(f"\nCitations: {totals['before']} before, {totals['after']} after "
+              f"— {'unchanged' if totals['before'] == totals['after'] else 'CHANGED'}")
+
+    bound = bind_dropped_scholar_ids(df, drops)
+    if bound:
+        print(f"Bound {bound} dropped row(s)' Scholar ID to the surviving paper, "
+              f"so their citations follow the merge.")
+
     before = len(df)
     kept = df[~df["Name"].isin(drop_names)]
     write_table(kept)

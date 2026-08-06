@@ -118,7 +118,10 @@ class Venues:
         """
         if not raw:
             return ""
-        low = str(raw).lower()
+        # BibTeX capitalization braces are formatting, not content: a booktitle
+        # of "Findings of the Association for Computational Linguistics, {ACL}"
+        # must match the same phrase as the unbraced form.
+        low = str(raw).lower().replace("{", "").replace("}", "")
 
         alias = self.alias_for(low)
         if alias:

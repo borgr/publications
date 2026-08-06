@@ -74,14 +74,36 @@ def _curl_get(url: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-# Semantic Scholar's unauthenticated quota is shared and small, so a 429 during a
-# long run is expected rather than exceptional. This used to disable S2 for the
-# remainder of the run on the second 429 -- and because the ACL Anthology and
-# OpenReview are both reached *through* S2's externalIds, that lost all three. On
-# a real run it triggered on the second paper, leaving the best sources
-# unavailable for the other 87. Now it backs off and comes back.
+# Semantic Scholar rate limits, per its own documentation:
+#
+#   unauthenticated  "rate-limited to 1000 requests per second shared among all
+#                    unauthenticated users", and "may also be further throttled
+#                    during periods of heavy use"
+#   with an API key  "The introductory rate limit for an API key is 1 RPS"
+#
+# The unauthenticated number looks generous but is a *global* pool shared with
+# every other anonymous caller, which is why a long run gets 429s almost
+# immediately -- on a real run, from the second paper onward. A free key is
+# slower on paper (1 RPS) but it is 1 RPS reserved for you, so it actually
+# completes. Request one at https://www.semanticscholar.org/product/api and set
+# it in config.py as S2_API_KEY, or in the S2_API_KEY environment variable.
+#
+# Without a key this still works, just with more waiting: a 429 pauses S2 for a
+# cooldown rather than disabling it for the whole run. Disabling it was the worse
+# bug, because the ACL Anthology and OpenReview are both reached *through* S2's
+# externalIds, so losing S2 lost all three.
 _S2_COOLDOWN_SECONDS = 120
 _s2_state = {"blocked_until": 0.0}
+
+
+def s2_api_key() -> str:
+    """The Semantic Scholar API key, from config.py or the environment."""
+    try:
+        import config
+        key = getattr(config, "S2_API_KEY", "") or ""
+    except Exception:
+        key = ""
+    return (key or os.environ.get("S2_API_KEY", "")).strip()
 
 
 def s2_available() -> bool:
@@ -98,9 +120,13 @@ def _http_get_json(url: str, retries: int = 2) -> dict | None:
     """GET JSON, pausing a rate-limited source rather than abandoning it."""
     if not s2_available():
         return None
+    headers = {"User-Agent": "resolve-arxiv-bib/1.0"}
+    key = s2_api_key()
+    if key:
+        headers["x-api-key"] = key
     for attempt in range(retries):
         try:
-            req = Request(url, headers={"User-Agent": "resolve-arxiv-bib/1.0"})
+            req = Request(url, headers=headers)
             with urlopen(req, timeout=20) as resp:
                 return json.loads(resp.read())
         except Exception as exc:
@@ -676,8 +702,27 @@ _PUBLISHED_SOURCES = {"DBLP", "ACL Anthology", "OpenReview", "DOI (clibib)",
                       "OpenAlex"}
 
 
-def gen_key(authors: str, year: str, title: str) -> str:
-    """Generate a short bib key from author/year/title, e.g. 'yadav2023ties'."""
+def _year_part(year) -> str:
+    """The 4-digit year for a key, or "" when it is unknown.
+
+    A NaN year used to be str()'d straight into the key, producing
+    `arvivnanstop` and `polonanstatistical`. Omitting it is both truthful and
+    stable: the key stops changing once the year becomes known... which it does
+    not, so the key stays put either way.
+    """
+    m = re.search(r'\b(19\d{2}|20\d{2}|21\d{2})\b', str(year or ""))
+    return m.group(1) if m else ""
+
+
+def gen_key(authors: str, year: str, title: str, taken=()) -> str:
+    """Generate a short bib key from author/year/title, e.g. 'yadav2023ties'.
+
+    `taken` is the keys already in use. Two different papers by the same author
+    in the same year whose titles share a first significant word collide
+    otherwise, and the collision is silent: both rows get the same key, one bib
+    entry serves both, and the build reports "matched 114 entries but 115 rows
+    have a Bib key". That happened to two distinct "Every Eval Ever" papers.
+    """
     last = re.sub(r'[^a-z]', '', authors.split(",")[0].strip().split()[-1].lower())
     skip = {"a", "an", "the", "of", "in", "on", "for", "with", "from", "to", "and", "is", "are"}
     word = next(
@@ -685,7 +730,10 @@ def gen_key(authors: str, year: str, title: str) -> str:
         "paper",
     )
     word = re.sub(r'[^a-z0-9]', '', word)
-    return f"{last}{year}{word}"
+    base = f"{last}{_year_part(year)}{word}"
+    return _disambiguate(base, taken, extras=[
+        re.sub(r'[^a-z0-9]', '', w.lower()) for w in re.split(r'\W+', title)
+        if w.lower() not in skip and len(w) > 2][1:])
 
 
 def update_bib_inplace(
@@ -756,9 +804,30 @@ def get_arxiv_entries(bib_text: str) -> list[dict]:
     return [e for e in parse_bibtex(bib_text) if _is_arxiv(e)]
 
 
-def placeholder_key(year: str, title: str) -> str:
+def placeholder_key(year: str, title: str, taken=()) -> str:
     """Key for a paper with no known first author, so gen_key cannot apply."""
-    return f"unknown{year}{normalize_text(title)[:10]}"
+    base = f"unknown{_year_part(year)}{normalize_text(title)[:10]}"
+    return _disambiguate(base, taken, extras=[normalize_text(title)[10:24]])
+
+
+def _disambiguate(base: str, taken, extras=()) -> str:
+    """Return `base`, or a variant not already in `taken`.
+
+    Extends with further title words before resorting to a numeric suffix, so a
+    disambiguated key stays readable and stays stable when regenerated for the
+    same paper.
+    """
+    taken = set(taken or ())
+    if base not in taken:
+        return base
+    candidate = base
+    for extra in extras:
+        if not extra:
+            continue
+        candidate += extra
+        if candidate not in taken:
+            return candidate
+    return next(f"{base}{n}" for n in range(2, 1000) if f"{base}{n}" not in taken)
 
 
 def get_missing_bib_entries(bib_text: str, df=None) -> list[dict]:
@@ -780,11 +849,26 @@ def get_missing_bib_entries(bib_text: str, df=None) -> list[dict]:
             print(f"Warning: could not read the publications table: {exc}", file=sys.stderr)
             return []
     existing_keys = {e["item_name"] for e in parse_bibtex(bib_text)}
+    # Keys already spoken for, so no two rows are handed the same one. Includes
+    # keys assigned earlier in this same pass.
+    assigned = set(existing_keys)
+    if "Bib" in df:
+        assigned |= {str(v).strip() for v in df["Bib"].dropna()
+                     if str(v).strip().lower() not in ("", "nan", "none")}
     missing = []
     for _, row in df.iterrows():
         name = str(row.get("Name", "") or "").strip()
         if not name:
             continue
+        # A row flagged as not a paper (a proceedings volume, a patent) needs no
+        # BibTeX entry, so it is not "missing" one.
+        paper_flag = row.get("Paper")
+        if paper_flag is not None and str(paper_flag).strip() not in ("", "nan"):
+            try:
+                if float(paper_flag) == 0:
+                    continue
+            except (TypeError, ValueError):
+                pass
         bib_key = str(row.get("Bib", "") or "").strip()
         if bib_key.lower() in ("nan", "none"):
             bib_key = ""
@@ -802,9 +886,10 @@ def get_missing_bib_entries(bib_text: str, df=None) -> list[dict]:
         if bib_key:
             key = bib_key           # set by hand but not yet resolved; keep it
         elif authors:
-            key = gen_key(authors, year, name)
+            key = gen_key(authors, year, name, taken=assigned)
         else:
-            key = placeholder_key(year, name)
+            key = placeholder_key(year, name, taken=assigned)
+        assigned.add(key)
 
         missing.append({"item_name": key, "title": name, "authors": authors,
                         "year": year, "content": ""})

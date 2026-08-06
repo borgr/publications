@@ -184,6 +184,9 @@ def gather():
         # deliberately carry no venueinf line.
         if row.get("Workshop-paper") == 1:
             continue
+        # Not a paper (a proceedings volume, a patent): its venue is irrelevant.
+        if row.get("Paper") == 0:
+            continue
         key = build_bib.simplify_venue(raw)
         if not key or venues.known(key):
             continue

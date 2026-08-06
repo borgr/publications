@@ -15,16 +15,16 @@ Retried automatically every run against DBLP, Semantic Scholar, the ACL Antholog
 
 - `shnarch2024inter` — Inter-training of pre-trained transformer-based language models using partitioning and classification — 2 failed lookup(s) so far
 - `honovich2022true` — True or false? faithful summarization with attribution — 2 failed lookup(s) so far
-- `hilelnanllm` — LLM Hypnosis: Characterizing the Fragility of RLHF Against Unprivileged Knowledge Injection — 2 failed lookup(s) so far
 - `choshen2025automated` — Automated training on massive multitask — 2 failed lookup(s) so far
 - `choshen2025base` — Base model selection for finetuning — 2 failed lookup(s) so far
-- `polonanstatistical` — A Statistical Framework for Game-Based AI Evaluation — 2 failed lookup(s) so far
 - `ghosh2026evals` — AI evals are becoming the new compute bottleneck — 2 failed lookup(s) so far
 - `gupta2026automated` — Automated Discovery Has No Universally Superior Harness — 2 failed lookup(s) so far
-- `akhtar2026proceedings` — Proceedings of the Workshop on Evaluating Evaluations (EvalEval) — 2 failed lookup(s) so far
 - `unknown2026retrievala` — Retrieval Augmented Generation Compositionality — 2 failed lookup(s) so far
+- `batzner2026everyeval` — Every eval ever: Toward a common language for ai eval reporting
+- `hilelllm` — LLM Hypnosis: Characterizing the Fragility of RLHF Against Unprivileged Knowledge Injection
+- `polostatistical` — A Statistical Framework for Game-Based AI Evaluation
 
-## Venue cells still holding a raw Scholar string (3)
+## Venue cells still holding a raw Scholar string (1)
 
 *recurring* — Will reappear as new papers arrive. Automating it is worthwhile.
 
@@ -32,10 +32,6 @@ Step 2 copies Scholar's venue text verbatim, and this text does not reduce to a 
 
 - `EvalEval Coalition Blog, April, 2026`
   - on: AI evals are becoming the new compute bottleneck
-- `Proceedings of the 29th International Conference on Computational …, 2022`
-  - on: Reinforcement learning with large action spaces for neural machine translation
-- `Proceedings of the Workshop on Evaluating Evaluations (EvalEval), 2026`
-  - on: Proceedings of the Workshop on Evaluating Evaluations (EvalEval)
 
 ## Citation counts summed across Scholar records (2)
 

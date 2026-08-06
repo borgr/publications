@@ -242,6 +242,30 @@ def fill_blanks(by_column, path=CSV_PATH):
     return written
 
 
+def set_column(column, assignments, path=CSV_PATH):
+    """Overwrite `column` for the named rows. Returns cells written.
+
+    Unlike `fill_blanks`, this replaces existing values, so callers must have a
+    source more authoritative than what is there. The one use is the venue of a
+    paper whose cell resolves to no known venue while its BibTeX entry names one:
+    a paper added while it was a preprint says "ArXiv", and once step 3 upgrades
+    its entry to the published version, this is what moves it out of the CV's
+    ArXiv section into the right one.
+    """
+    df = read_table(path if os.path.exists(path) else None)
+    if column not in df.columns or not assignments:
+        return 0
+    written = 0
+    for name, value in assignments.items():
+        mask = df["Name"] == name
+        if mask.any():
+            df.loc[mask, column] = value
+            written += int(mask.sum())
+    if written:
+        write_table(df, path)
+    return written
+
+
 def set_bib_keys(assignments, path=CSV_PATH):
     """Fill in the Bib cell for rows identified by exact Name. Returns the count."""
     df = read_table(path if os.path.exists(path) else None)

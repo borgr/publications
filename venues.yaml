@@ -33,6 +33,8 @@ venues:
   # ── Conferences, ranked by Google Scholar ───────────────────────────────────
   acl:
     match:
+      # Findings is filed under its parent venue, as EMNLP-Findings already was.
+      - findings of the association for computational linguistics, acl
       - annual meeting of the association for computational
     kind: conference
     scholar_metrics:
@@ -42,6 +44,7 @@ venues:
 
   emnlp:
     match:
+      - "findings of the association for computational linguistics: emnlp"
       - empirical methods in natural language processing
     kind: conference
     scholar_metrics:
@@ -51,6 +54,7 @@ venues:
 
   naacl:
     match:
+      - "findings of the association for computational linguistics: naacl"
       - north american chapter of the association for computational
       - naacl-hlt
     kind: conference
@@ -70,6 +74,7 @@ venues:
 
   eacl:
     match:
+      - "findings of the association for computational linguistics: eacl"
       - european chapter of the association for computational
     kind: conference
     scholar_metrics:

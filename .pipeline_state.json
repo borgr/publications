@@ -2,13 +2,13 @@
   "_comment": "Input content hashes from the last successful run of each step, used to skip work whose inputs have not changed. Safe to delete: the next run redoes everything.",
   "steps": {
     "build_bib": {
-      "completed_at": "2026-08-05T20:59:33",
-      "completed_epoch": 1785977973,
+      "completed_at": "2026-08-05T22:12:33",
+      "completed_epoch": 1785982353,
       "inputs": {
         "citations.csv": "005c80b4412b9def",
-        "orig.bib": "b29ee7a646572b8d",
-        "papers.csv": "fcf56e78959e0fc8",
-        "venues.yaml": "1529053141f72e12"
+        "orig.bib": "537f58080b5d218f",
+        "papers.csv": "6af541b3ecec1458",
+        "venues.yaml": "ae5b7f4ed8bb2891"
       }
     },
     "fetch": {
@@ -19,10 +19,10 @@
       }
     },
     "rebuild_tex": {
-      "completed_at": "2026-08-05T20:59:33",
-      "completed_epoch": 1785977973,
+      "completed_at": "2026-08-05T22:12:33",
+      "completed_epoch": 1785982353,
       "inputs": {
-        "Wzmn.bib": "0a5813c1805d7023",
+        "Wzmn.bib": "6bf04075ab50ff29",
         "profile_stats.json": "c42ac7c7eeb7c95c"
       }
     },

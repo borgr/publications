@@ -35,13 +35,14 @@ sys.path.insert(0, FILE_DIR)
 
 import notify
 
+from bib_utils import extract_field, parse_bibtex
+from build_bib import simplify_venue
 from citations_io import read_citation_rows
 from identity import IdentityStore, join_citations
 from pipeline_state import PipelineState
-from build_bib import simplify_venue
 from venues import Venues
 from table_io import (CSV_PATH, XLSX_PATH, append_rows, fill_blanks, read_table,
-                      set_bib_keys)
+                      set_bib_keys, set_column)
 from identity import MATCH_NORMALIZED, classify_title, normalize_title
 from resolve_arxiv import (
     _PUBLISHED_SOURCES,
@@ -203,47 +204,56 @@ def step2b_enrich(dry_run: bool) -> int:
     join = join_citations(rows, sorted(set(df["Name"].dropna())),
                           store=IdentityStore.load())
     venues = Venues.load()
+    # The bibliography, for resolving a venue from the entry rather than from
+    # Scholar's truncated venue text.
+    try:
+        with open(BIB_PATH) as f:
+            bib_entries = {e["item_name"]: e for e in parse_bibtex(f.read())}
+    except OSError:
+        bib_entries = {}
 
     author_fills, venue_fills = {}, {}
+
+    # Authors come from Scholar, for rows Scholar knows about.
     for name, source in join.source.items():
         match = df[df["Name"] == name]
         if match.empty:
             continue
-        row = match.iloc[0]
-
-        authors = str(row.get("Authors") or "").strip()
+        authors = str(match.iloc[0].get("Authors") or "").strip()
         if authors.lower() in ("", "nan", "none") and source.get("authors"):
             author_fills[name] = source["authors"]
 
-        # Only ever fill a venue cell that is *empty*. A non-empty cell is a
-        # judgement, even when it does not resolve to a known key: "SURGeLLM" is
-        # a workshop and "ArXiv" means not-yet-published. Overwriting either from
-        # Scholar's venue string would silently promote a workshop paper to an
-        # ACL main-conference paper -- which is exactly what this tried to do to
-        # "The mighty torr" before this check existed. Unplaceable non-empty
-        # cells are reported by the worklist instead.
-        current = row.get("Venue")
-        if isinstance(current, str) and current.strip():
+    # Venues come from the *bibliography*, which is authoritative: step 3 fetched
+    # each entry from DBLP or the ACL Anthology, so its booktitle names the venue
+    # in full where Scholar truncates ("Proceedings of the 29th International
+    # Conference on Computational ..." could be COLING or Computational
+    # Linguistics).
+    #
+    # Deliberately never from Scholar's venue string. A cell that does not resolve
+    # is still a judgement -- "SURGeLLM" is a workshop, "ArXiv" means not yet
+    # published -- and taking Scholar's word for it would have relabelled "The
+    # mighty torr" (Workshop-paper=1) as an ACL main-conference paper. The bib
+    # entry cannot make that mistake: a preprint's entry has no booktitle, so
+    # there is nothing to fill from and the cell is left alone.
+    for _, row in df.iterrows():
+        name = str(row.get("Name") or "").strip()
+        if not name:
             continue
-        # Prefer the resolved BibTeX entry's own booktitle/journal over Scholar's
-        # venue text. Scholar truncates ("Proceedings of the 29th International
-        # Conference on Computational …" could be COLING or CL), whereas the
-        # entry step 3 fetched from DBLP or the ACL Anthology names the venue in
-        # full. The bibliography is the authority here; Scholar is the fallback.
-        resolved = ""
-        key = str(row.get("Bib") or "").strip()
-        entry = bib_entries.get(key)
-        if entry:
-            for field in ("booktitle", "journal"):
-                value = extract_field(entry["content"], field)
-                if value:
-                    resolved = venues.match_raw(value)
-                    if resolved:
-                        break
-        if not resolved and source.get("venue"):
-            resolved = venues.match_raw(source["venue"])
-        if resolved and resolved != current_key:
-            venue_fills[name] = resolved
+        current = row.get("Venue")
+        current_key = simplify_venue(current) if isinstance(current, str) else ""
+        if current_key and venues.known(current_key):
+            continue
+        entry = bib_entries.get(str(row.get("Bib") or "").strip())
+        if not entry:
+            continue
+        for field in ("booktitle", "journal"):
+            value = extract_field(entry["content"], field)
+            if not value:
+                continue
+            resolved = venues.match_raw(value)
+            if resolved and resolved != current_key:
+                venue_fills[name] = resolved
+                break
 
     if not author_fills and not venue_fills:
         print("  Nothing to fill.")
@@ -258,7 +268,10 @@ def step2b_enrich(dry_run: bool) -> int:
         print("  (dry-run: table not modified)")
         return len(author_fills) + len(venue_fills)
 
-    filled = fill_blanks({"Authors": author_fills, "Venue": venue_fills})
+    # Authors only where blank (Scholar is not more authoritative than a human);
+    # venue overwritten, because the source is the bibliography itself.
+    filled = fill_blanks({"Authors": author_fills})
+    filled += set_column("Venue", venue_fills)
     print(f"  Filled {filled} cell(s) in {os.path.basename(TABLE_PATH)}")
     return filled
 

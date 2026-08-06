@@ -321,3 +321,54 @@ def test_a_backslash_heavy_entry_survives_a_full_round_trip():
         PREPRINT, [("doe2024preprint", LATEX_HEAVY, "DBLP")], [])
     (entry,) = [e for e in parse_bibtex(text) if e["item_name"] == "doe2024preprint"]
     assert "italic" in entry["title"]
+
+
+# ── keys must be unique, and must never contain "nan" ────────────────────────
+
+def test_gen_key_omits_an_unknown_year():
+    """A NaN year used to be str()'d into the key: `arvivnanstop`."""
+    assert gen_key("Arviv, O", "nan", "Stop Guessing When to Stop") == "arvivstop"
+    assert gen_key("Arviv, O", float("nan"), "Stop Guessing") == "arvivstop"
+    assert gen_key("Arviv, O", "", "Stop Guessing") == "arvivstop"
+    assert "nan" not in placeholder_key("nan", "Some Title")
+
+
+def test_gen_key_accepts_a_numeric_year():
+    assert gen_key("Doe, J", 2024, "Some Paper") == "doe2024some"
+    assert gen_key("Doe, J", "2024.0", "Some Paper") == "doe2024some"
+
+
+def test_gen_key_disambiguates_a_collision_readably():
+    """Two distinct 'Every Eval Ever' papers were handed the same key."""
+    first = gen_key("Batzner, J", "2026", "Every Eval Ever: Toward a common language")
+    second = gen_key("Batzner, J", "2026",
+                     "Every Eval Ever: A Unifying Schema and Community Repository",
+                     taken={first})
+    assert first != second
+    assert second.startswith(first), "should extend, not renumber, when it can"
+
+
+def test_gen_key_falls_back_to_a_suffix_when_words_run_out():
+    assert gen_key("Doe, J", "2024", "Alpha", taken={"doe2024alpha"}) == "doe2024alpha2"
+
+
+def test_missing_entries_never_share_a_key():
+    """The invariant: one pass must not hand two rows the same key."""
+    df = _df([
+        {"Name": "Every Eval Ever: Toward a common language", "Bib": None,
+         "Authors": "Batzner, J", "year": 2026},
+        {"Name": "Every Eval Ever: A Unifying Schema and Community Repository",
+         "Bib": None, "Authors": "Batzner, J", "year": 2026},
+        {"Name": "Every Eval Ever: Something Else Again", "Bib": None,
+         "Authors": "Batzner, J", "year": 2026},
+    ])
+    keys = [e["item_name"] for e in get_missing_bib_entries("", df=df)]
+    assert len(keys) == len(set(keys)) == 3, keys
+
+
+def test_generated_key_never_collides_with_an_existing_bib_entry():
+    df = _df([{"Name": "A Published Paper Renamed", "Bib": None,
+               "Authors": "Doe, Jane", "year": 2024}])
+    existing = '@inproceedings{doe2024published, title = {X}}'
+    (entry,) = get_missing_bib_entries(existing, df=df)
+    assert entry["item_name"] != "doe2024published"

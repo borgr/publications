@@ -221,7 +221,11 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
             venue_info = _VENUES.description(venue_simple)
             if venue_info:
                 rest = "\n    venueinf={" + venue_info + "}," + rest
-            elif venue_simple:
+            elif venue_simple and not _VENUES.known(venue_simple):
+                # Only an *unknown* venue is a problem. A known one with no
+                # description is deliberate: `kind: other` (a blog) has no
+                # ranking to state, and warning about it made a configured venue
+                # look unconfigured.
                 print(f"Warning: unknown venue {venue_raw!r} (key: {venue_simple!r}) — venueinf omitted")
 
         category = _categorize(venue_simple, is_arxiv, is_review, is_workshop)
