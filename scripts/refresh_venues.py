@@ -178,14 +178,14 @@ def describe(entry, metrics, categories):
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true",
                         help="Report changes without writing venues.yaml")
     parser.add_argument("--source", choices=("all", "scholar", "openalex"),
                         default="all")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     venues = Venues.load()
     if not venues.venues:
@@ -204,7 +204,13 @@ def main():
     changes, unresolved = [], []
     for key, entry in venues.venues.items():
         entry = entry or {}
-        metrics = {}
+        # Start from what is already recorded and replace only the sub-blocks this
+        # run actually refreshed. Building a fresh dict instead means --source
+        # openalex deletes the Scholar ranking, and describe() then rewrites the
+        # CV sentence from "2nd of 20 ... by Google Scholar" down to a citedness
+        # number -- a silent demotion of every ranked venue.
+        metrics = dict(entry.get("metrics") or {})
+        refreshed = []
 
         sm_cfg = entry.get("scholar_metrics") or {}
         rows = category_rows.get(sm_cfg.get("category")) or []
@@ -214,6 +220,7 @@ def main():
                 rank, name, h5 = hit
                 metrics["scholar_metrics"] = {"rank": rank, "total": len(rows),
                                               "h5_index": h5, "matched_name": name}
+                refreshed.append("scholar_metrics")
             else:
                 unresolved.append((key, "not found in its Scholar Metrics category"))
 
@@ -222,13 +229,14 @@ def main():
             found = fetch_openalex(oa_cfg["search"], oa_cfg.get("id"))
             if found:
                 metrics["openalex"] = found
+                refreshed.append("openalex")
                 oa_cfg.setdefault("id", found["id"])
                 entry["openalex"] = oa_cfg
             else:
                 unresolved.append((key, "no confident OpenAlex match"))
             time.sleep(0.3)
 
-        if not metrics:
+        if not refreshed:
             continue
         metrics["refreshed"] = time.strftime("%Y-%m-%d")
         entry["metrics"] = metrics
