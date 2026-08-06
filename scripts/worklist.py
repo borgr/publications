@@ -403,12 +403,12 @@ def render(sections, result):
     return "\n".join(out)
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(description="Generate WORKLIST.md")
     parser.add_argument("--check", action="store_true",
                         help="Exit 1 if any item is open (does not write)")
     parser.add_argument("--quiet", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     sections, total, result = gather()
 
