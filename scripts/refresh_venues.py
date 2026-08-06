@@ -33,7 +33,7 @@ from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from venues import Venues, VENUES_PATH  # noqa: E402
+from venues import VENUES_PATH, Venues
 
 try:
     import config

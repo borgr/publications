@@ -22,6 +22,30 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    # Fast and first: a syntax error or an undefined name in a rarely-run script
+    # is the kind of thing that only surfaces months later, during the one run
+    # of the year that needed it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ruff
+        # Only ruff: linting must not wait on pandas.
+        run: pip install "$(grep -E '^ruff' requirements-dev.txt)"
+
+      - name: Lint
+        # The rules and their exceptions live in pyproject.toml, so this is the
+        # same command a contributor runs locally.
+        run: ruff check --output-format=github .
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -29,7 +53,7 @@ jobs:
       matrix:
         # The floor is what the code actually requires (str | None unions,
         # the walrus in pipeline_state); the ceiling catches upcoming breakage.
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,6 +70,38 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Tests
+        run: python -m pytest tests/ -q
+
+  floor:
+    # Does the lowest version each pin claims to accept actually work?
+    #
+    # requirements.txt deliberately uses `>=` rather than exact pins, which means
+    # a fresh install gets today's releases and the floors are never exercised by
+    # anything. A forker installing into an older environment is the one person
+    # who finds out, and they have no way to tell a bad floor from their own
+    # mistake. This resolves every `>=` to `==` and runs the suite against it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          # The oldest supported interpreter, because the oldest dependencies are
+          # the ones with no wheels for the newest one.
+          python-version: "3.10"
+
+      - name: Pin every floor exactly
+        run: |
+          sed -E 's/>=/==/' requirements.txt > floor.txt
+          echo "pytest==7.4" >> floor.txt
+          cat floor.txt
+
+      - name: Install the floor
+        run: pip install -r floor.txt
+
+      - name: Tests against the floor
         run: python -m pytest tests/ -q
 
   rebuild:

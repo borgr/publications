@@ -13,11 +13,18 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import resolve_arxiv
-from resolve_arxiv import (_is_arxiv, _get_arxiv_id, gen_key,
-                          get_missing_bib_entries, placeholder_key, resolve,
-                          sort_by_attempts, update_bib_inplace)
 from bib_utils import parse_bibtex
 from identity import IdentityStore
+from resolve_arxiv import (
+    _get_arxiv_id,
+    _is_arxiv,
+    gen_key,
+    get_missing_bib_entries,
+    placeholder_key,
+    resolve,
+    sort_by_attempts,
+    update_bib_inplace,
+)
 
 PUBLISHED = '''@inproceedings{doe2024paper,
   title = {A Published Paper},

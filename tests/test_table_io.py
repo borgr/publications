@@ -14,8 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import table_io
-from table_io import (ValidationError, append_rows, read_table, set_bib_keys,
-                      validate, write_table)
+from table_io import ValidationError, append_rows, read_table, set_bib_keys, validate, write_table
 
 HEADER = ("Time of publish ID,Venue,Name,Bib,Authors,year,Paper,Workshop-paper,"
           '"Review, Survey and Position",Open\n')

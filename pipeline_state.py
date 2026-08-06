@@ -74,7 +74,7 @@ class RunLock:
         for _ in range(2):
             try:
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
+            except FileExistsError as err:
                 pid = self._read_pid()
                 # Any live holder blocks, including this process. Exempting our
                 # own PID would let a run silently steal its own lock, which
@@ -82,7 +82,7 @@ class RunLock:
                 if pid and self._alive(pid):
                     raise AlreadyRunning(
                         f"another run is in progress (pid {pid}). If it is not, "
-                        f"delete {os.path.basename(self.path)}.")
+                        f"delete {os.path.basename(self.path)}.") from err
                 # Stale: the recorded process is gone. Take it over.
                 try:
                     os.unlink(self.path)

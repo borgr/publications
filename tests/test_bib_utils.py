@@ -12,8 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from bib_utils import (extract_field, find_duplicate_keys, normalize_text,
-                       parse_bibtex)
+from bib_utils import extract_field, find_duplicate_keys, normalize_text, parse_bibtex
 
 # ACL Anthology exports quote their fields. This shape produced no title at all.
 ACL_STYLE = '''@inproceedings{charpentier-etal-2025-findings,
@@ -122,8 +121,13 @@ def test_find_duplicate_keys():
 # and because the brace scan then ran past the entry's end it took the rest of
 # the file with it. One such title emptied an entire bibliography in testing.
 
-from bib_utils import (_entry_year, choose_published, escape_field_value,  # noqa: E402
-                       is_preprint, is_wellformed_entry, publication_rank)
+from bib_utils import (
+    choose_published,
+    escape_field_value,
+    is_preprint,
+    is_wellformed_entry,
+    publication_rank,
+)
 
 
 def test_escape_balances_a_stray_open_brace():
@@ -250,7 +254,7 @@ def test_choose_published_is_stable_when_everything_ties():
 
 # ── editing a field without assuming its delimiter ───────────────────────────
 
-from bib_utils import find_field_span  # noqa: E402
+from bib_utils import find_field_span
 
 
 def test_find_field_span_reports_the_delimiter():

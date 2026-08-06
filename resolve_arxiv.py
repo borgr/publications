@@ -44,8 +44,15 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
-from bib_utils import (escape_field_value, extract_field, is_wellformed_entry,
-                       normalize_text, parse_bibtex, publication_rank, read_df)
+from bib_utils import (
+    escape_field_value,
+    extract_field,
+    is_wellformed_entry,
+    normalize_text,
+    parse_bibtex,
+    publication_rank,
+    read_df,
+)
 from identity import harvest_ids_from_bibtex, harvest_ids_from_s2
 
 DEFAULT_BIB    = os.path.join(FILE_DIR, "orig.bib")
@@ -670,7 +677,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         if acl_id:
             bib = fetch_acl_bib(acl_id, original_key)
             if bib:
-                return bib, f"ACL Anthology"
+                return bib, "ACL Anthology"
 
         # OpenReview via S2 publicationVenue URL
         pub_venue = s2_data.get("publicationVenue") or {}

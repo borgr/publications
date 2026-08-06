@@ -14,8 +14,8 @@ FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
 import build_bib
-from build_bib import BibCategories
 import config
+from build_bib import BibCategories
 
 TEX_PATH      = os.path.join(FILE_DIR, "overleaf", "main.tex")
 STATS_PATH    = os.path.join(FILE_DIR, "profile_stats.json")
@@ -90,7 +90,7 @@ _STATS_RE   = re.compile(r'\\textbf\{Citations\t(\d+)\nh-index\t(\d+)\n\}')
 _AUTHOR_LINE_RE = re.compile(r'(\\noindent\\today\n\n?)([^\n]+)(\n\\textbf\{Citations)', re.MULTILINE)
 
 
-def patch_bst_author(author_name: str = None) -> list:
+def patch_bst_author(author_name: str | None = None) -> list:
     """Point the BST files' name-bolding at config.AUTHOR_NAME.
 
     Returns a list of problems. Not fatal -- the CV still compiles, it just
@@ -274,10 +274,10 @@ def check_overleaf_present() -> str:
     if os.path.exists(TEX_PATH):
         return ""
     if not os.path.isdir(OVERLEAF_DIR) or not os.listdir(OVERLEAF_DIR):
-        return (f"overleaf/ is empty — it is a git submodule that was not checked "
-                f"out.\n  Fix with:  git submodule update --init\n"
-                f"  For a fork, point it at your own project:  "
-                f"python init_new_author.py --overleaf-url <your-overleaf-git-url>")
+        return ("overleaf/ is empty — it is a git submodule that was not checked "
+                "out.\n  Fix with:  git submodule update --init\n"
+                "  For a fork, point it at your own project:  "
+                "python init_new_author.py --overleaf-url <your-overleaf-git-url>")
     # Name the template that is actually present. The submodule copy only exists
     # while overleaf/ points at the original author's project, so naming it
     # unconditionally gave a fork a command that could not work.

@@ -1,6 +1,10 @@
 """Detecting output that was built but never published."""
-import os, subprocess, sys
+import os
+import subprocess
+import sys
+
 import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT); sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import worklist

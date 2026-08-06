@@ -117,6 +117,7 @@ def wipe_contributions_xlsx(root=None):
     papers_csv = os.path.join(root, "papers.csv")
     if os.path.exists(papers_csv):
         import pandas as pd
+
         from table_io import write_table
         df = pd.read_csv(papers_csv, dtype=str, nrows=0)
         write_table(df, papers_csv)

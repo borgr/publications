@@ -9,8 +9,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
-import build_bib
 from refresh_venues import describe, match_venue, ordinal
+
+import build_bib
 from venues import Venues
 
 YAML = """
@@ -254,6 +255,7 @@ def test_remove_pretitle_tags_is_a_no_op_when_absent():
 def test_the_live_bibliography_is_entirely_parseable():
     """Every entry in the generated CV bibliography must re-parse standalone."""
     import os
+
     from bib_utils import is_wellformed_entry, parse_bibtex
     path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "overleaf", "Wzmn.bib")

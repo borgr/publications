@@ -100,7 +100,7 @@ def test_the_table_is_emptied_but_keeps_its_columns(fork):
 
 def test_citations_keep_a_header_row(fork):
     ina.wipe_citations_csv(root=str(fork))
-    lines = [l for l in (fork / "citations.csv").read_text().splitlines() if l.strip()]
+    lines = [ln for ln in (fork / "citations.csv").read_text().splitlines() if ln.strip()]
     assert len(lines) == 1, "expected a header and no data rows"
     assert "A Paper" not in lines[0]
 

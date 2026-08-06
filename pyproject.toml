@@ -1,0 +1,59 @@
+# Configuration only. This is not a package: the pipeline is a set of scripts
+# run from the repository root, so there is no [project] table and nothing to
+# install. Having the file at all is what makes `ruff` and `pytest` behave the
+# same on a fork, in CI, and on the author's machine.
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"      # the floor the CI matrix tests
+extend-exclude = ["overleaf"] # a submodule: someone else's LaTeX project
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes: undefined names, unused imports, unreachable code
+    "W",    # pycodestyle warnings, including invalid escape sequences
+    "I",    # import sorting, so diffs stop churning on import order
+    "UP",   # pyupgrade, held to target-version
+    "B",    # bugbear: mutable defaults, except-without-from, loop-variable slips
+    "RUF",  # ruff's own checks
+]
+ignore = [
+    # Line length is not enforced: there is no formatter in this repo, so E501
+    # would mean hand-reflowing the figure scripts' long plotting calls for no
+    # behavioural gain, and it would fight every future edit to them.
+    "E501",
+    # Every module in this repo is a script run from the root, and the tests add
+    # the root to sys.path before importing it. That insert has to precede the
+    # import, so imports genuinely cannot all be at the top.
+    "E402",
+    # zip(strict=) is 3.10+, but the zips here are over columns of the same
+    # frame, where a length mismatch is impossible by construction.
+    "B905",
+    # Concatenating onto a list literal is clearer than unpacking for the
+    # two-element cases here.
+    "RUF005",
+    # Non-ASCII in strings is the point: author names and venue titles.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# RUF059: `out, err = capsys.readouterr()` reads better than `_out, err`, and a
+#         test that only asserts on one stream is the normal case.
+# E702:   the semicolons in these tests are two halves of one arrangement step.
+"tests/*" = ["RUF059", "E702"]
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "bib_utils", "build_bib", "citations_io", "config", "fetch_citations",
+    "identity", "init_new_author", "notify", "papers_fig", "papers_graph",
+    "pipeline_state", "rebuild_tex", "resolve_arxiv", "table_io", "update",
+    "venues",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Import mode and rootdir, so `pytest` works from the root with no PYTHONPATH.
+pythonpath = ["."]

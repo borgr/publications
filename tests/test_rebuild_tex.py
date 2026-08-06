@@ -15,8 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import rebuild_tex
 from build_bib import BibCategories
-from rebuild_tex import (TexUpdateError, _find_author_names_in_bst,
-                         _nocite_str, update_tex)
+from rebuild_tex import TexUpdateError, _find_author_names_in_bst, _nocite_str, update_tex
 
 # The shape of the real document, reduced to what the code anchors on. Tabs and
 # newlines in the stats block are load-bearing: the regex matches them literally.

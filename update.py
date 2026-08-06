@@ -35,21 +35,21 @@ FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
 import notify
-
 from bib_utils import extract_field, parse_bibtex
 from build_bib import simplify_venue
 from citations_io import read_citation_rows
-from identity import IdentityStore, join_citations
+from identity import (
+    MATCH_NORMALIZED,
+    IdentityStore,
+    classify_title,
+    join_citations,
+    normalize_title,
+)
 from pipeline_state import AlreadyRunning, PipelineState, RunLock
-from venues import Venues
-from table_io import (CSV_PATH, XLSX_PATH, append_rows, fill_blanks, read_table,
-                      set_bib_keys, set_column)
-from identity import MATCH_NORMALIZED, classify_title, normalize_title
 from resolve_arxiv import (
-    _PUBLISHED_SOURCES,
     _DEPRIORITIZE_AFTER,
+    _PUBLISHED_SOURCES,
     _get_arxiv_id,
-    gen_key,
     get_arxiv_entries,
     get_missing_bib_entries,
     load_attempts,
@@ -58,6 +58,16 @@ from resolve_arxiv import (
     sort_by_attempts,
     update_bib_inplace,
 )
+from table_io import (
+    CSV_PATH,
+    XLSX_PATH,
+    append_rows,
+    fill_blanks,
+    read_table,
+    set_bib_keys,
+    set_column,
+)
+from venues import Venues
 
 CITATIONS_CSV = os.path.join(FILE_DIR, "citations.csv")
 # The table is papers.csv once migrated, the xlsx before that.
@@ -336,7 +346,7 @@ def step3_resolve(dry_run: bool) -> tuple:
         # hundreds of requests and several minutes of deliberate rate-limit
         # sleeps, which is not what "show me what would change" should cost.
         missing = get_missing_bib_entries(bib_text)
-        print(f"  (dry-run: no lookups performed)")
+        print("  (dry-run: no lookups performed)")
         print(f"  Would query {len(arxiv_entries)} arXiv entries for a published version")
         print(f"  Would look up {len(missing)} table row(s) with no entry in orig.bib:")
         for entry in missing[:20]:
@@ -394,7 +404,7 @@ def step3_resolve(dry_run: bool) -> tuple:
     store.save()
 
     # Also track arXiv entries that couldn't be resolved to any bib at all
-    for key, bib, source in updates:
+    for key, bib, _source in updates:
         if not bib:
             title = next((e["title"] for e in arxiv_entries if e["item_name"] == key), key)
             not_found.append((title[:70], key))
@@ -633,7 +643,7 @@ Companion commands, none needed routinely:
     def _should_run(step: str, skip_flag: bool) -> bool:
         """Decide and explain. Returns True when the step should execute."""
         if skip_flag:
-            print(f"  Skipped (--skip flag).")
+            print("  Skipped (--skip flag).")
             return False
         if args.force:
             return True
@@ -737,6 +747,6 @@ if __name__ == "__main__":
         sys.exit(1)
     except SystemExit:
         raise
-    except Exception as exc:  # noqa: BLE001 - top-level guard for unattended runs
+    except Exception as exc:
         notify.failure(f"{type(exc).__name__}: {exc}")
         raise

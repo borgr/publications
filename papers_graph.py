@@ -1,19 +1,19 @@
-import random
-from matplotlib.transforms import Affine2D
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from scipy import interpolate
-from scipy.signal import savgol_filter
 import math
 import os
+import random
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 import umap.umap_ as umap
-from sklearn.manifold import TSNE
-from scipy.spatial import ConvexHull
-from matplotlib.patches import PathPatch, Polygon
-from scipy.interpolate import splprep, splev
+from matplotlib.patches import PathPatch
 from matplotlib.path import Path
+from scipy.interpolate import splev, splprep
+from scipy.signal import savgol_filter
+from scipy.spatial import ConvexHull
+from sklearn.manifold import TSNE
+
 sns.set_theme(style="white", font="Times New Roman", font_scale=1.5)
 random.seed(0)
 np.random.seed(0)
@@ -228,11 +228,11 @@ def create_smooth_scaled_hull(points, scale_factor=1.2, smoothing=0.5, num_point
 
     # Create a periodic interpolation of the hull points
     try:
-        tck, u = splprep([hull_points[:, 0], hull_points[:, 1]],
+        tck, _u = splprep([hull_points[:, 0], hull_points[:, 1]],
                          s=smoothing, per=True, k=min(3, len(hull_points) - 1))
-    except Exception as e:
+    except Exception:
         # Fallback to simpler smoothing if splprep fails
-        tck, u = splprep([hull_points[:, 0], hull_points[:, 1]],
+        tck, _u = splprep([hull_points[:, 0], hull_points[:, 1]],
                          s=smoothing * 2, per=True, k=min(2, len(hull_points) - 1))
 
     # Generate more points along the smooth curve
@@ -274,7 +274,7 @@ def highlighted_plot(embedding, df, highlight_lines, colors=None, no_points=Fals
                 alpha=alpha)
     for i, line in enumerate(highlight_lines):
         subset = embedding[df[line] == 1]
-        if type(colors) == dict:
+        if isinstance(colors, dict):
             color = colors[line]
         elif colors is None:
             color = None
@@ -461,7 +461,7 @@ def rename(line):
 df = pd.read_excel(
     os.path.join(os.path.dirname(__file__), 'Contributions_table.xlsx'))
 all_lines = ["NLP", "Small Models", "Debating", "Recycling", "Scaling Laws", "Human-Model Interaction", "Efficient Pretraining Research", "Resources", "The Science of Deep Learning",
-             "Methods", "Dataset", "Training", "Evaluation", "Shared-task\effort", "Language&Cognition", "Open", "Meta-science", "Enabling Low Budget Research", "Efficiency"]
+             "Methods", "Dataset", "Training", "Evaluation", r"Shared-task\effort", "Language&Cognition", "Open", "Meta-science", "Enabling Low Budget Research", "Efficiency"]
 
 lines = ["Small Models", "Recycling", "Efficient Pretraining Research",  # "The Science of Deep Learning"  # , "Training",
          "Evaluation", "Language&Cognition", "Meta-science", "Enabling Low Budget Research", "Efficiency"]

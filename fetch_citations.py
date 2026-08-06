@@ -86,8 +86,9 @@ def _curl_get(url: str) -> tuple[int, str]:
     body = "\n__STATUS__".join(body_parts)  # rejoin in case body itself had the marker
     try:
         status = int(status_line.strip())
-    except ValueError:
-        raise RuntimeError(f"Unexpected curl output format: {result.stdout[-200:]}")
+    except ValueError as err:
+        raise RuntimeError(
+            f"Unexpected curl output format: {result.stdout[-200:]}") from err
     return status, body
 
 

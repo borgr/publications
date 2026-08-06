@@ -13,11 +13,20 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from identity import (MATCH_EXACT_ID, MATCH_FUZZY, MATCH_NORMALIZED,
-                      MATCH_TOO_CLOSE, IdentityStore, classify_title,
-                      find_duplicate_titles, harvest_ids_from_bibtex,
-                      harvest_ids_from_s2, join_citations, normalize_title,
-                      title_stem, titles_match)
+from identity import (
+    MATCH_EXACT_ID,
+    MATCH_FUZZY,
+    MATCH_NORMALIZED,
+    IdentityStore,
+    classify_title,
+    find_duplicate_titles,
+    harvest_ids_from_bibtex,
+    harvest_ids_from_s2,
+    join_citations,
+    normalize_title,
+    title_stem,
+    titles_match,
+)
 
 BABYLM_1_TABLE = "Findings of the {B}aby{LM} Challenge: Sample-Efficient Pretraining on Developmentally Plausible Corpora"
 BABYLM_1_SCHOLAR = "Findings of the BabyLM challenge: Sample-efficient pretraining on developmentally plausible corpora"

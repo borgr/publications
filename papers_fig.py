@@ -1,11 +1,12 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from scipy import interpolate
-from scipy.signal import savgol_filter
 import math
 import os
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from scipy.signal import savgol_filter
+
 sns.set_theme(style="white", font="Times New Roman", font_scale=1.5)
 
 
@@ -55,7 +56,7 @@ smoothing_factor = 5  # Higher values = more smoothing
 df = pd.read_excel(
     os.path.join(os.path.dirname(__file__), 'Contributions_table.xlsx'))
 lines = ['Resources', 'The Science of\nDeep Learning', 'Methods', 'Dataset', 'Training',
-         'Evaluation', 'Shared-task\effort', 'Language&Cognition', 'Open',
+         'Evaluation', r'Shared-task\effort', 'Language&Cognition', 'Open',
          'Meta-science', 'Enabling Low Budget Research', 'Efficiency', 'NLP']
 lines = ['NLP', 'Enabling Low Budget Research', 'The Science of\nDeep Learning', 'Methods',
          'Evaluation', 'Open', 'Language&Cognition',  'Resources'

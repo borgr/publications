@@ -16,7 +16,6 @@ Only open items appear. A section that is absent is done.
 """
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -24,13 +23,17 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import build_bib  # noqa: E402
-from bib_utils import find_duplicate_keys, parse_bibtex, read_df  # noqa: E402
-from citations_io import read_citation_rows  # noqa: E402
-from identity import (MATCH_EXACT_ID, IdentityStore, find_duplicate_titles,  # noqa: E402
-                      join_citations)
-from resolve_arxiv import get_missing_bib_entries, load_attempts  # noqa: E402
-from venues import Venues  # noqa: E402
+import build_bib
+from bib_utils import find_duplicate_keys, parse_bibtex, read_df
+from citations_io import read_citation_rows
+from identity import (
+    MATCH_EXACT_ID,
+    IdentityStore,
+    find_duplicate_titles,
+    join_citations,
+)
+from resolve_arxiv import get_missing_bib_entries, load_attempts
+from venues import Venues
 
 WORKLIST_PATH = os.path.join(ROOT, "WORKLIST.md")
 BIB_PATH = os.path.join(ROOT, "orig.bib")
@@ -253,7 +256,7 @@ def gather():
 
     if unparsed:
         lines = []
-        for key, entries in sorted(unparsed.items()):
+        for _key, entries in sorted(unparsed.items()):
             raw, name = sorted(entries)[0]
             lines.append(f"- `{raw[:80]}`")
             lines.append(f"  - on: {name[:90]}")

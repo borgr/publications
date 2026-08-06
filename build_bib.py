@@ -5,11 +5,22 @@ from typing import NamedTuple
 
 import pandas as pd
 
-from bib_utils import (choose_published, find_duplicate_keys, find_field_span,
-                       normalize_text, parse_bibtex, publication_rank, read_df)
+from bib_utils import (
+    choose_published,
+    find_duplicate_keys,
+    find_field_span,
+    normalize_text,
+    parse_bibtex,
+    publication_rank,
+    read_df,
+)
 from citations_io import read_citation_rows
-from identity import (IdentityStore, duplicate_groups_by_identifier,
-                      find_duplicate_titles, join_citations)
+from identity import (
+    IdentityStore,
+    duplicate_groups_by_identifier,
+    find_duplicate_titles,
+    join_citations,
+)
 from venues import Venues
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -192,14 +203,14 @@ def _build_name2cite(citation_rows, df_names, store=None):
     if result.ambiguous:
         print("AMBIGUOUS: Scholar records that are NOT the same paper matched one "
               "table row — check for a duplicate or mistyped row:")
-        for name, cands, total in result.ambiguous:
+        for name, cands, _total in result.ambiguous:
             print(f"  table: {name[:66]}")
             for title, tier, score in cands:
                 print(f"{'':>9}<- [{tier} {score:.0%}] {title[:60]}")
     if result.too_close:
         print("Scholar records that matched two table rows equally well "
               "(not attributed to either):")
-        for title, value, score in result.too_close:
+        for title, _value, score in result.too_close:
             print(f"  {score:.0%}  {title[:66]}")
     if result.unmatched:
         print("Cited papers with no row in the publications table:")
@@ -385,7 +396,7 @@ def resolve_duplicate_rows(parsed, df):
         winner, losers = choose_published(entries)
         for loser in losers:
             suppressed.add(loser["item_name"])
-        notes.append((winner["item_name"], [l["item_name"] for l in losers],
+        notes.append((winner["item_name"], [other["item_name"] for other in losers],
                       publication_rank(winner)))
 
     for names in find_duplicate_titles(df["Name"].dropna()).values():
@@ -402,7 +413,7 @@ def resolve_duplicate_rows(parsed, df):
         winner, losers = choose_published(entries)
         for loser in losers:
             suppressed.add(loser["item_name"])
-        notes.append((winner["item_name"], [l["item_name"] for l in losers],
+        notes.append((winner["item_name"], [other["item_name"] for other in losers],
                       publication_rank(winner)))
     return suppressed, notes
 
@@ -418,7 +429,7 @@ def _report_duplicates(parsed, df):
     problems = []
 
     dup_titles = find_duplicate_titles(df["Name"].dropna())
-    for norm, names in sorted(dup_titles.items()):
+    for _norm, names in sorted(dup_titles.items()):
         problems.append(("duplicate-table-row", names[0], names))
         print(f"Warning: {len(names)} table rows are the same paper:")
         for n in names:

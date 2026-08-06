@@ -29,9 +29,15 @@ import pandas as pd
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-import build_bib  # noqa: E402
-from table_io import (CSV_PATH, REQUIRED_COLUMNS, XLSX_PATH,  # noqa: E402
-                      read_table, validate, write_table)
+import build_bib
+from table_io import (
+    CSV_PATH,
+    REQUIRED_COLUMNS,
+    XLSX_PATH,
+    read_table,
+    validate,
+    write_table,
+)
 
 # Columns build_bib reads by name. If one of these is empty, a feature is dead.
 _CODE_READ_COLUMNS = tuple(build_bib.RELEVANT_TAGS.keys()) + (

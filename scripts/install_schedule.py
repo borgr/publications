@@ -103,7 +103,7 @@ def main():
     print(f"  Runs every {days[args.day % 7]} at {args.hour:02d}:{args.minute:02d}")
     print(f"  Log:  {plist['StandardOutPath']}")
     print(f"  Test it now:  launchctl start {LABEL}")
-    print(f"  Remove:       python scripts/install_schedule.py --uninstall")
+    print("  Remove:       python scripts/install_schedule.py --uninstall")
     return 0
 
 

@@ -135,7 +135,7 @@ def test_no_previous_file_means_no_guard(monkeypatch, tmp_path):
 
 
 def test_zero_papers_is_always_refused(monkeypatch, tmp_path):
-    out = _run_main(monkeypatch, tmp_path, [])
+    _run_main(monkeypatch, tmp_path, [])
     with pytest.raises(RuntimeError) as excinfo:
         fc.main()
     assert "0 papers" in str(excinfo.value)
