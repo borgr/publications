@@ -381,7 +381,13 @@ def fetch_openreview_bib(forum_id: str, original_key: str) -> str | None:
     if isinstance(authors, list):
         authors = " and ".join(authors)
     venue = _val("venue") or _val("venueid") or ""
-    year = str(data.get("cdate", ""))[:4] or str(_val("year") or "")
+    # cdate is epoch *milliseconds*, so its first four digits are "1700", not a
+    # year -- every entry from this source was dated 1700.
+    year = ""
+    try:
+        year = str(time.gmtime(int(data["cdate"]) / 1000).tm_year)
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        year = str(_val("year") or "")
     if not title:
         return None
     return (
@@ -562,13 +568,23 @@ def fetch_by_doi(doi: str, original_key: str) -> str | None:
 
 # ── arXiv fallback ────────────────────────────────────────────────────────────
 
-def fetch_arxiv_bib(arxiv_id: str, original_key: str) -> str:
-    """Parse arXiv abstract page for metadata and build a @misc entry."""
+def fetch_arxiv_bib(arxiv_id: str, original_key: str,
+                    known_title: str = "") -> str:
+    """Parse arXiv abstract page for metadata and build a @misc entry.
+
+    `known_title` is the title the caller already has, from the publications
+    table or the existing bib entry. It matters because this is the last
+    fallback: without a title the entry fails `is_wellformed_entry` and is
+    refused by `update_bib_inplace`, so a paper whose abstract page could not be
+    fetched -- arXiv rate-limiting a long run, or no network -- was dropped from
+    the CV entirely and retried forever, even though its title was known all
+    along.
+    """
     from bs4 import BeautifulSoup
 
     html = _curl_get(f"https://arxiv.org/abs/{arxiv_id}")
     if not html:
-        return _bare_arxiv_bib(arxiv_id, original_key)
+        return _bare_arxiv_bib(arxiv_id, original_key, known_title)
 
     soup = BeautifulSoup(html, "html.parser")
 
@@ -588,7 +604,7 @@ def fetch_arxiv_bib(arxiv_id: str, original_key: str) -> str:
             year = m.group(1)
 
     if not title:
-        return _bare_arxiv_bib(arxiv_id, original_key)
+        return _bare_arxiv_bib(arxiv_id, original_key, known_title)
 
     return (
         f"@misc{{{original_key},\n"
@@ -602,11 +618,12 @@ def fetch_arxiv_bib(arxiv_id: str, original_key: str) -> str:
     )
 
 
-def _bare_arxiv_bib(arxiv_id: str, key: str) -> str:
+def _bare_arxiv_bib(arxiv_id: str, key: str, title: str = "") -> str:
     m = re.match(r'(\d{2})', arxiv_id)
     year = f"20{m.group(1)}" if m else ""
     return (
         f"@misc{{{key},\n"
+        f"  title = {{{escape_field_value(title)}}},\n"
         f"  year = {{{year}}},\n"
         f"  eprint = {{{arxiv_id}}},\n"
         f"  archivePrefix = {{arXiv}},\n"
@@ -644,6 +661,8 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         if arxiv_id:
             return fetch_arxiv_bib(arxiv_id, original_key), "arXiv (no usable title)"
         return "", "no usable title"
+    # Past this point `title` is known to be usable, so it is worth passing to
+    # the fallback as the title of last resort.
 
     # The entry's own year, used to reject a similarly-titled different paper.
     year_m = (re.search(r'\byear\s*=\s*\{?\s*(\d{4})', existing_content)
@@ -732,7 +751,8 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     if corr_bib:
         return _replace_key(corr_bib, original_key), "arXiv (DBLP/CoRR)"
     if arxiv_id:
-        return fetch_arxiv_bib(arxiv_id, original_key), "arXiv (export API)"
+        return (fetch_arxiv_bib(arxiv_id, original_key, known_title=title),
+                "arXiv (export API)")
 
     return "", "not found"
 
@@ -1053,7 +1073,7 @@ def get_missing_bib_entries(bib_text: str, df=None) -> list[dict]:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         description="Resolve arXiv BibTeX entries to published versions"
     )
@@ -1064,7 +1084,7 @@ def main() -> None:
     parser.add_argument("--in-place", action="store_true",
                         help="also write the published venues back into --bib "
                              "(title, author and pretitle are left alone; diff it)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     with open(args.bib) as f:
         bib_text = f.read()
