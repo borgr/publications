@@ -95,3 +95,89 @@ jobs:
             echo "::warning title=WORKLIST.md is stale::Regenerate with 'python scripts/worklist.py' and commit."
             git --no-pager diff -- WORKLIST.md | head -60
           fi
+
+  overleaf:
+    # Does the Overleaf project actually match the committed data?
+    #
+    # This job exists because that question had no answer anywhere. Every local
+    # run was made with --no-push, so main.tex and Wzmn.bib were correct on disk
+    # while Overleaf served a CV that was hundreds of citations out of date --
+    # and every run reported success, because generating the files *was* the
+    # success. Compiling in Overleaf was the only way to find out.
+    #
+    # Fork-safe: with no OVERLEAF_GIT_URL secret the job explains itself and
+    # passes. It is skipped on pull_request, where secrets are unavailable to
+    # forked PRs by design.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Is an Overleaf project configured?
+        id: cfg
+        env:
+          OVERLEAF_GIT_URL: ${{ secrets.OVERLEAF_GIT_URL }}
+        run: |
+          if [ -n "$OVERLEAF_GIT_URL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Overleaf check skipped::No OVERLEAF_GIT_URL secret is set, so CI cannot see your Overleaf project. To enable it, add a repository secret OVERLEAF_GIT_URL containing your Overleaf git URL with a token (Overleaf → Menu → Git). Without it, publishing is verified only by the local run."
+          fi
+
+      - name: Clone the Overleaf project
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          OVERLEAF_GIT_URL: ${{ secrets.OVERLEAF_GIT_URL }}
+        run: |
+          # --quiet, and the URL only ever via the environment: it carries a token.
+          git clone --quiet --depth 1 "$OVERLEAF_GIT_URL" overleaf
+
+      - name: Rebuild the CV from committed data
+        if: steps.cfg.outputs.configured == 'true'
+        run: python rebuild_tex.py
+
+      - name: Overleaf matches the committed data
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          # Opt in by setting a repository variable PUBLISH_TO_OVERLEAF to "true".
+          # Off by default: pushing to Overleaf is a visible, outward-facing edit
+          # to a document you may be editing yourself, so it is a decision rather
+          # than a default.
+          PUBLISH: ${{ vars.PUBLISH_TO_OVERLEAF }}
+        run: |
+          cd overleaf
+          # --porcelain, not `git diff --quiet`: a file the project does not have
+          # yet is untracked, and a diff cannot see it. That is exactly the state
+          # of a fresh fork whose Overleaf project has no Wzmn.bib, which would
+          # otherwise be reported as up to date.
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Overleaf is up to date with the committed data."
+            exit 0
+          fi
+          echo "The compiled CV in Overleaf does not match the committed data:"
+          git status --short
+          if [ "$PUBLISH" != "true" ]; then
+            echo "::error title=Overleaf is stale::Overleaf would compile an out-of-date CV. Run 'python update.py' locally to publish, or set the repository variable PUBLISH_TO_OVERLEAF=true to let CI push it."
+            exit 1
+          fi
+          git config user.name "publications-ci"
+          git config user.email "publications-ci@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: publish publications data from CI"
+          # Overleaf's own editor advances the remote, so rebase before retrying
+          # rather than failing on a race with a human edit.
+          git push origin || { git pull --rebase --autostash origin && git push origin; }
+          echo "::notice title=Overleaf updated::Pushed the rebuilt CV to Overleaf."

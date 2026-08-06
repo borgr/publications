@@ -115,6 +115,28 @@ gets a CAPTCHA, not data:
   a determinism check, and a failure if the table has duplicate rows or an
   ambiguous citation join. No secrets, works in a fork.
 
+### Letting CI see your Overleaf project (optional)
+
+Without this, nothing outside your own machine can tell whether the CV Overleaf
+compiles matches the committed data — the failure that motivated it was a run of
+`--no-push` runs that left Overleaf hundreds of citations behind while every run
+reported success.
+
+1. In Overleaf: **Menu → Git**, and copy the URL with its token.
+2. In GitHub: **Settings → Secrets and variables → Actions → New repository
+   secret**, named `OVERLEAF_GIT_URL`.
+
+CI then rebuilds the CV from the committed data and **fails if Overleaf would
+compile something different**. To have CI push the fix rather than just report
+it, add a repository *variable* `PUBLISH_TO_OVERLEAF` set to `true`. That is off
+by default: Overleaf is a document you also edit by hand, so writing to it is a
+decision, not a default. It rebases before retrying, so a push and a hand edit
+racing does not fail the run.
+
+With no secret set, the job prints how to enable itself and passes — a fork is
+never red for a project it does not have. The same staleness is reported locally
+in `WORKLIST.md`, which needs no credentials.
+
 ## Files
 
 ### Data you edit
