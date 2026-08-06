@@ -186,32 +186,28 @@ def test_live_table_loads_and_has_the_required_columns():
         assert column in df.columns
 
 
-def test_csv_invents_no_rows_the_xlsx_never_had():
-    """The migration may only lose deliberately-removed rows, never add any.
+def test_bib_keys_never_change_for_a_paper_in_both_formats():
+    """A paper's BibTeX key must be stable across the migration.
 
-    Not an equality check: scripts/dedupe.py removes duplicate rows from the CSV
-    while the xlsx keeps its pre-migration contents, so the two legitimately
-    differ in size. What must never happen is a row appearing in the CSV that
-    was not in the source -- that would mean the migration, or step 2, invented
-    one.
+    Deliberately *not* a subset check on rows. papers.csv legitimately diverges
+    from the xlsx in both directions during normal operation -- dedupe.py removes
+    duplicate rows, and step 2 adds papers Scholar has published since the
+    migration -- so asserting containment would fail on the first real run. What
+    must never drift is a paper's key, because orig.bib and identity.json are
+    both keyed on it.
     """
     if not os.path.exists(table_io.CSV_PATH) or not os.path.exists(table_io.XLSX_PATH):
         pytest.skip("both formats not present")
+    from identity import normalize_title
+
     from_csv = read_table()
     from_xlsx = read_table(prefer_csv=False)
-
-    from identity import normalize_title
-    csv_titles = {normalize_title(n) for n in from_csv["Name"]}
-    xlsx_titles = {normalize_title(n) for n in from_xlsx["Name"]}
-    assert csv_titles <= xlsx_titles, (
-        f"rows in papers.csv with no counterpart in the xlsx: "
-        f"{csv_titles - xlsx_titles}")
-
-    # Every BibTeX key the CSV carries must match the xlsx's for the same paper.
     csv_keys = {normalize_title(n): (k or "") for n, k in
                 zip(from_csv["Name"], from_csv["Bib"].fillna(""))}
     xlsx_keys = {normalize_title(n): (k or "") for n, k in
                  zip(from_xlsx["Name"], from_xlsx["Bib"].fillna(""))}
-    for title, key in csv_keys.items():
-        if key and xlsx_keys.get(title):
-            assert key == xlsx_keys[title], f"key changed for {title}"
+
+    shared = [t for t in csv_keys if t in xlsx_keys and csv_keys[t] and xlsx_keys[t]]
+    assert shared, "expected papers present in both formats"
+    for title in shared:
+        assert csv_keys[title] == xlsx_keys[title], f"key changed for {title}"

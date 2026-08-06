@@ -81,10 +81,27 @@ def test_live_venues_file_loads_and_is_categorised():
     assert not (venues.journals & venues.conferences), "a venue is both kinds"
 
 
-def test_every_live_venue_has_a_description():
+def test_every_rankable_live_venue_has_a_description():
+    """`kind: other` venues (blogs) have no ranking, so no description."""
     venues = Venues.load()
-    missing = [k for k in venues.venues if not venues.description(k)]
+    missing = [k for k in venues.venues
+               if not venues.description(k) and k not in venues.non_ranked]
     assert missing == []
+
+
+def test_non_ranked_venue_is_known_but_undescribed():
+    venues = Venues.load()
+    assert venues.non_ranked, "expected at least one kind: other venue"
+    for key in venues.non_ranked:
+        assert venues.known(key), "must not be reported as a missing venue"
+        assert not venues.description(key), "must emit no venueinf sentence"
+
+
+def test_blog_post_resolves_and_is_filed_as_non_reviewed():
+    import build_bib
+    key = build_bib.simplify_venue("Blog Post, EvalEval Coalition, 2026")
+    assert key == "blog"
+    assert build_bib._categorize(key, False, False, False) == "drafts"
 
 
 def test_build_bib_reads_the_yaml_not_hardcoded_dicts():

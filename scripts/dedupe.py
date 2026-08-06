@@ -25,8 +25,10 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from bib_utils import choose_published, parse_bibtex, publication_rank  # noqa: E402
-from identity import find_duplicate_titles, normalize_title  # noqa: E402
+from bib_utils import (_entry_year, choose_published, is_preprint,  # noqa: E402
+                       parse_bibtex, publication_rank)
+from identity import (IdentityStore, duplicate_groups_by_identifier,  # noqa: E402
+                      find_duplicate_titles, normalize_title)
 from table_io import read_table, write_table  # noqa: E402
 
 BIB_PATH = os.path.join(ROOT, "orig.bib")
@@ -37,7 +39,21 @@ def plan(df, bib_text):
     by_key = {e["item_name"]: e for e in parse_bibtex(bib_text)}
     drops, unresolved = [], []
 
-    for names in find_duplicate_titles(df["Name"].dropna()).values():
+    # Group by identifier first: it catches retitled duplicates that title
+    # comparison misses, and it is a stronger claim about sameness.
+    name_by_key = {}
+    for _, row in df.iterrows():
+        key = str(row.get("Bib") or "").strip()
+        if key and key.lower() not in ("nan", "none"):
+            name_by_key[key] = str(row.get("Name") or "")
+    groups = []
+    for keys in duplicate_groups_by_identifier(IdentityStore.load(), set(name_by_key)):
+        groups.append([name_by_key[k] for k in keys if k in name_by_key])
+    groups.extend(find_duplicate_titles(df["Name"].dropna()).values())
+
+    for names in groups:
+        if len(names) < 2:
+            continue
         candidates = []
         for name in names:
             cell = df[df["Name"] == name]["Bib"]
@@ -54,10 +70,27 @@ def plan(df, bib_text):
         winner = next(c for c in rankable if c[2] is winner_entry)
         for loser_entry in loser_entries:
             loser = next(c for c in rankable if c[2] is loser_entry)
-            drops.append((loser, winner,
-                          f"@{loser_entry['type']} rank {publication_rank(loser_entry)} "
-                          f"< @{winner_entry['type']} rank {publication_rank(winner_entry)}"))
+            drops.append((loser, winner, _why(winner_entry, loser_entry)))
     return drops, unresolved
+
+
+def _why(winner, loser):
+    """State the reason the winner won, in the terms actually used to decide it.
+
+    Must mirror `choose_published`'s ordering. Printing only the publication rank
+    produced the self-contradicting "@article rank 10 < @misc rank -12" once year
+    became the tiebreaker between two preprints.
+    """
+    if is_preprint(loser) and not is_preprint(winner):
+        return (f"@{winner['type']} is the published version, "
+                f"@{loser['type']} is a preprint")
+    if is_preprint(winner) and is_preprint(loser):
+        wy, ly = _entry_year(winner), _entry_year(loser)
+        if wy != ly:
+            return (f"both are preprints and {wy} is the current version "
+                    f"(the other is {ly})")
+    return (f"@{winner['type']} ranks {publication_rank(winner)} vs "
+            f"@{loser['type']} at {publication_rank(loser)}")
 
 
 def main():

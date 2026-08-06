@@ -49,7 +49,7 @@ FLAG_COLUMNS = (
     "The Science of Deep Learning", "Methods", "Dataset", "Training",
     "Evaluation", "Shared-task\\effort", "Language&Cognition", "Open",
     "Meta-science", "Enabling Low Budget Research", "Efficiency", "Paper",
-    "Workshop-paper", "Review, Survey and Position", "Not empty", "Other",
+    "Workshop-paper", "Review, Survey and Position", "Other",
     "inter\\eval", "Allowing", "Efficient Evaluation",
 )
 

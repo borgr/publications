@@ -25,6 +25,9 @@ _NON_ENTRY_TYPES = {"comment", "string", "preamble"}
 _ENTRY_START_RE = re.compile(r'@(\w+)\s*\{\s*([^,\s{}]+)\s*,', re.MULTILINE)
 
 
+_reported_table_problems = set()
+
+
 def read_df():
     """Load the publications table.
 
@@ -37,8 +40,12 @@ def read_df():
     from table_io import read_table, validate  # imported here to avoid a cycle
 
     df = read_table()
+    # Several modules call this in one run; report each distinct problem once so
+    # the same warning does not appear three times in a run's output.
     for problem in validate(df):
-        print(f"Table warning: {problem}")
+        if problem not in _reported_table_problems:
+            _reported_table_problems.add(problem)
+            print(f"Table warning: {problem}")
     return df
 
 
@@ -213,21 +220,93 @@ def publication_rank(entry):
     return score
 
 
-def choose_published(entries):
-    """Pick the most-published entry. Returns (winner, [losers]).
+def is_preprint(entry):
+    """True if the entry describes a preprint rather than a published version."""
+    etype = str(entry.get("type", "")).lower()
+    content = entry.get("content", "") or ""
+    if etype in _PUBLISHED_TYPES or extract_field(content, "booktitle"):
+        return False
+    if etype == "article":
+        journal = extract_field(content, "journal")
+        return bool(journal and _PREPRINT_JOURNAL_RE.search(journal)) or not journal
+    if etype in _PREPRINT_TYPES:
+        return True
+    return bool(re.search(r'\b(archiveprefix|eprint)\s*=', content, re.IGNORECASE))
 
-    Ties break on the longest content, then on the key, so the choice is stable
-    across runs rather than dependent on input order.
+
+def _entry_year(entry):
+    m = re.search(r'\b(1[89]\d{2}|20\d{2}|21\d{2})\b',
+                  extract_field(entry.get("content", "") or "", "year"))
+    return int(m.group(1)) if m else 0
+
+
+def choose_published(entries):
+    """Pick the entry to keep when several describe one paper. (winner, [losers]).
+
+    Ordered by, in priority:
+
+      1. published over preprint -- the version of record is what a CV should cite
+      2. the newer year, *within* the same class. Two preprints of one paper are
+         its v1 and v2, and the newer carries the current title: this repo has
+         "Can You Trust Your Metric?" (2024) and "How Safe is Your Safety
+         Metric?" (2025) as one arXiv ID, and keeping the 2024 one would print a
+         title the authors have since replaced. Deliberately does not apply
+         across classes -- a 2024 published paper still beats its 2025 preprint.
+      3. publication_rank, then content length, then key, so the result is
+         stable across runs rather than dependent on input order.
     """
     if not entries:
         return None, []
     ordered = sorted(
         entries,
-        key=lambda e: (publication_rank(e), len(e.get("content", "")),
-                       e.get("item_name", "")),
+        key=lambda e: (not is_preprint(e), _entry_year(e), publication_rank(e),
+                       len(e.get("content", "")), e.get("item_name", "")),
         reverse=True,
     )
     return ordered[0], ordered[1:]
+
+
+def escape_field_value(text):
+    """Make a plain-text string safe as a braced BibTeX field value.
+
+    Only for values built from structured data (OpenAlex and OpenReview JSON),
+    which is plain text -- never for BibTeX copied from DBLP or the ACL Anthology,
+    where a backslash or a brace is deliberate LaTeX.
+
+    An unbalanced brace here is not cosmetic. `@article{k, title = {A { Brace}}`
+    does not parse, and because the brace scan then runs past the entry's end it
+    takes the rest of the file with it: one such title silently emptied a whole
+    bibliography in testing.
+    """
+    if text is None:
+        return ""
+    # Backslashes are held aside while braces are escaped, so the braces in the
+    # \textbackslash{} replacement do not themselves get escaped.
+    placeholder = "\x00"
+    out = str(text).replace("\\", placeholder)
+    out = out.replace("{", r"\{").replace("}", r"\}")
+    out = out.replace(placeholder, r"\textbackslash{}")
+    return " ".join(out.split())
+
+
+def is_wellformed_entry(bibtex, expected_key=None):
+    """True if `bibtex` parses back to exactly one entry with a title.
+
+    The backstop before anything is written to orig.bib. Every generated or
+    fetched entry goes through it, so a malformed response from any source costs
+    that one lookup rather than the file.
+    """
+    entries = parse_bibtex(bibtex or "")
+    if len(entries) != 1:
+        return False
+    entry = entries[0]
+    if not entry["item_name"] or not entry["title"]:
+        return False
+    if expected_key is not None and entry["item_name"] != expected_key:
+        return False
+    # Reconstruction must be lossless, which catches trailing garbage that the
+    # parser skipped over rather than rejected.
+    return (entry["beg"] + entry["rest"]).strip() == bibtex.strip()
 
 
 def find_duplicate_keys(entries):

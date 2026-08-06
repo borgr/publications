@@ -44,7 +44,8 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
-from bib_utils import normalize_text, parse_bibtex, publication_rank, read_df
+from bib_utils import (escape_field_value, is_wellformed_entry, normalize_text,
+                       parse_bibtex, publication_rank, read_df)
 from identity import harvest_ids_from_bibtex, harvest_ids_from_s2
 
 DEFAULT_BIB    = os.path.join(FILE_DIR, "orig.bib")
@@ -73,12 +74,29 @@ def _curl_get(url: str) -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
-_s2_disabled = False  # set on first 429; skips S2 for the rest of the run
+# Semantic Scholar's unauthenticated quota is shared and small, so a 429 during a
+# long run is expected rather than exceptional. This used to disable S2 for the
+# remainder of the run on the second 429 -- and because the ACL Anthology and
+# OpenReview are both reached *through* S2's externalIds, that lost all three. On
+# a real run it triggered on the second paper, leaving the best sources
+# unavailable for the other 87. Now it backs off and comes back.
+_S2_COOLDOWN_SECONDS = 120
+_s2_state = {"blocked_until": 0.0}
+
+
+def s2_available() -> bool:
+    """False while S2 is in a rate-limit cooldown."""
+    if time.time() < _s2_state["blocked_until"]:
+        return False
+    if _s2_state["blocked_until"]:
+        print("\n    S2 cooldown over, using it again", end="", flush=True)
+        _s2_state["blocked_until"] = 0.0
+    return True
 
 
 def _http_get_json(url: str, retries: int = 2) -> dict | None:
-    global _s2_disabled
-    if _s2_disabled:
+    """GET JSON, pausing a rate-limited source rather than abandoning it."""
+    if not s2_available():
         return None
     for attempt in range(retries):
         try:
@@ -86,15 +104,15 @@ def _http_get_json(url: str, retries: int = 2) -> dict | None:
             with urlopen(req, timeout=20) as resp:
                 return json.loads(resp.read())
         except Exception as exc:
-            exc_str = str(exc)
-            is_429 = "429" in exc_str or getattr(exc, "code", None) == 429
+            is_429 = "429" in str(exc) or getattr(exc, "code", None) == 429
             if is_429:
                 if attempt == 0:
-                    print(f"\n    S2 rate-limited, waiting 30s…", end="", flush=True)
+                    print("\n    S2 rate-limited, waiting 30s…", end="", flush=True)
                     time.sleep(30)
                     continue
-                print(f"\n    S2 rate-limited again — disabling S2 for this run", end="", flush=True)
-                _s2_disabled = True
+                _s2_state["blocked_until"] = time.time() + _S2_COOLDOWN_SECONDS
+                print(f"\n    S2 still rate-limited — pausing it for "
+                      f"{_S2_COOLDOWN_SECONDS}s", end="", flush=True)
                 return None
             if attempt == retries - 1:
                 print(f"\n    HTTP error ({exc})", file=sys.stderr, end="")
@@ -170,7 +188,15 @@ def _get_arxiv_id(entry: dict) -> str | None:
 
 
 def _replace_key(bibtex: str, new_key: str) -> str:
-    return re.sub(r'(@\w+\s*\{)\s*[^,\s]+\s*,', rf'\g<1>{new_key},', bibtex, count=1)
+    """Rewrite an entry's key. Uses a function replacement, never a template.
+
+    `re.sub` parses its *replacement* for backreferences and escapes, so any
+    interpolated text containing a backslash is a live grenade: a BibTeX entry
+    with a LaTeX accent (`\\i`, `\\'e`) raises `re.error: bad escape`. A callable
+    replacement is taken literally.
+    """
+    return re.sub(r'(@\w+\s*\{)\s*[^,\s]+\s*,',
+                  lambda m: m.group(1) + new_key + ",", bibtex, count=1)
 
 
 def _simplify_title(t: str) -> str:
@@ -295,10 +321,10 @@ def fetch_openreview_bib(forum_id: str, original_key: str) -> str | None:
         return None
     return (
         f"@inproceedings{{{original_key},\n"
-        f"  title = {{{title}}},\n"
-        f"  author = {{{authors}}},\n"
-        f"  booktitle = {{{venue}}},\n"
-        f"  year = {{{year}}},\n"
+        f"  title = {{{escape_field_value(title)}}},\n"
+        f"  author = {{{escape_field_value(authors)}}},\n"
+        f"  booktitle = {{{escape_field_value(venue)}}},\n"
+        f"  year = {{{escape_field_value(year)}}},\n"
         f"  url = {{https://openreview.net/forum?id={forum_id}}}\n"
         f"}}"
     )
@@ -397,12 +423,14 @@ def openalex_to_bibtex(work, original_key):
     else:
         entry_type, venue_field = "misc", None
 
+    # Values come from JSON, so they are plain text and must be escaped before
+    # going inside braces -- an unbalanced brace in a title is otherwise fatal.
     lines = [f"@{entry_type}{{{original_key},",
-             f"  title = {{{title}}},"]
+             f"  title = {{{escape_field_value(title)}}},"]
     if authors:
-        lines.append(f"  author = {{{authors}}},")
+        lines.append(f"  author = {{{escape_field_value(authors)}}},")
     if venue_field:
-        lines.append(f"  {venue_field[0]} = {{{venue_field[1]}}},")
+        lines.append(f"  {venue_field[0]} = {{{escape_field_value(venue_field[1])}}},")
     if year:
         lines.append(f"  year = {{{year}}},")
     for field, key in (("volume", "volume"), ("issue", "number")):
@@ -499,9 +527,9 @@ def fetch_arxiv_bib(arxiv_id: str, original_key: str) -> str:
 
     return (
         f"@misc{{{original_key},\n"
-        f"  title = {{{title}}},\n"
-        f"  author = {{{authors_str}}},\n"
-        f"  year = {{{year}}},\n"
+        f"  title = {{{escape_field_value(title)}}},\n"
+        f"  author = {{{escape_field_value(authors_str)}}},\n"
+        f"  year = {{{escape_field_value(year)}}},\n"
         f"  eprint = {{{arxiv_id}}},\n"
         f"  archivePrefix = {{arXiv}},\n"
         f"  url = {{https://arxiv.org/abs/{arxiv_id}}}\n"
@@ -606,7 +634,10 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         known_doi = harvest_ids_from_bibtex(existing_content).get("doi", "")
     if not known_doi and store is not None:
         known_doi = (store.records.get(original_key) or {}).get("doi") or ""
-    if known_doi:
+    # An arXiv DOI (10.48550/...) only ever resolves back to the preprint, so
+    # asking is a wasted request that then gets rejected by the rank guard -- it
+    # did so 10 times on a real run.
+    if known_doi and not known_doi.lower().startswith("10.48550/"):
         bib = fetch_by_doi(known_doi, original_key)
         if bib:
             _remember(doi=known_doi)
@@ -669,6 +700,14 @@ def update_bib_inplace(
         if source not in _PUBLISHED_SOURCES:
             continue
 
+        # Refuse anything that does not parse back to exactly this one entry.
+        # Without it, a title containing an unbalanced brace is written verbatim,
+        # fails to parse, and takes the remainder of the file with it.
+        if not is_wellformed_entry(new_bib, expected_key=key):
+            print(f"  [rejected] {key}: {source} returned BibTeX that does not "
+                  f"parse back cleanly", file=sys.stderr)
+            continue
+
         # Never trade a more-published entry for a less-published one. The source
         # label says where the replacement came from, not how good it is: DBLP
         # can return a workshop @misc for a paper whose existing entry is the
@@ -688,7 +727,12 @@ def update_bib_inplace(
             r'@\w+\s*\{' + re.escape(key) + r',.*?\r?\n\}',
             re.DOTALL,
         )
-        new_text, count = pattern.subn(new_bib.rstrip('\n'), bib_text, count=1)
+        # A callable replacement, so the new entry is inserted literally. Passing
+        # the string directly made re parse it as a template, and a real run died
+        # with `re.error: bad escape \i` on a LaTeX accent -- after every lookup
+        # had been made, so the whole run's work was lost.
+        replacement = new_bib.rstrip('\n')
+        new_text, count = pattern.subn(lambda _m: replacement, bib_text, count=1)
         if count:
             bib_text = new_text
             n_replaced += 1
@@ -696,6 +740,10 @@ def update_bib_inplace(
     for _key, new_bib in new_entries:
         if re.search(r'@\w+\s*\{' + re.escape(_key) + r'\s*,', bib_text):
             print(f"  [skip duplicate] {_key} already in bib", file=sys.stderr)
+            continue
+        if not is_wellformed_entry(new_bib, expected_key=_key):
+            print(f"  [rejected] {_key}: generated BibTeX does not parse back "
+                  f"cleanly, not appended", file=sys.stderr)
             continue
         bib_text = bib_text.rstrip('\n') + '\n\n' + new_bib + '\n'
         n_appended += 1

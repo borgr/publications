@@ -112,9 +112,18 @@ def step2_add_new_papers(dry_run: bool) -> int:
 
     known_titles = [str(n) for n in df["Name"].dropna()]
 
+    # A Scholar record whose ID is already bound to a paper is known outright,
+    # regardless of what its title now says. Without this the fuzzy-matched
+    # papers are re-reported on every run forever, because step 2 compared only
+    # titles and never consulted the identifiers the pipeline had recorded.
+    store = IdentityStore.load()
+    bound_scholar_ids = set(store.index("scholar_id"))
+
     new_papers, assumed_known = [], []
     for p in papers:
         if "patent" in (p.get("venue") or "").lower():
+            continue
+        if p.get("scholar_id") and p["scholar_id"] in bound_scholar_ids:
             continue
         matched, tier, score = classify_title(p["title"], known_titles)
         if matched is None:
@@ -206,18 +215,33 @@ def step2b_enrich(dry_run: bool) -> int:
         if authors.lower() in ("", "nan", "none") and source.get("authors"):
             author_fills[name] = source["authors"]
 
-        # Only rewrite a venue cell that the build genuinely cannot place. The
-        # test has to be the *same* resolution build_bib performs -- match plus
-        # the truncation fallback -- otherwise a good cell like "ACL 2016" looks
-        # unplaceable (match_raw alone does not truncate) and gets overwritten
-        # with a bare "acl", throwing away the year.
+        # Only ever fill a venue cell that is *empty*. A non-empty cell is a
+        # judgement, even when it does not resolve to a known key: "SURGeLLM" is
+        # a workshop and "ArXiv" means not-yet-published. Overwriting either from
+        # Scholar's venue string would silently promote a workshop paper to an
+        # ACL main-conference paper -- which is exactly what this tried to do to
+        # "The mighty torr" before this check existed. Unplaceable non-empty
+        # cells are reported by the worklist instead.
         current = row.get("Venue")
-        current_key = simplify_venue(current) if isinstance(current, str) else ""
-        if current_key and venues.known(current_key):
+        if isinstance(current, str) and current.strip():
             continue
-        if not source.get("venue"):
-            continue
-        resolved = venues.match_raw(source["venue"])
+        # Prefer the resolved BibTeX entry's own booktitle/journal over Scholar's
+        # venue text. Scholar truncates ("Proceedings of the 29th International
+        # Conference on Computational …" could be COLING or CL), whereas the
+        # entry step 3 fetched from DBLP or the ACL Anthology names the venue in
+        # full. The bibliography is the authority here; Scholar is the fallback.
+        resolved = ""
+        key = str(row.get("Bib") or "").strip()
+        entry = bib_entries.get(key)
+        if entry:
+            for field in ("booktitle", "journal"):
+                value = extract_field(entry["content"], field)
+                if value:
+                    resolved = venues.match_raw(value)
+                    if resolved:
+                        break
+        if not resolved and source.get("venue"):
+            resolved = venues.match_raw(source["venue"])
         if resolved and resolved != current_key:
             venue_fills[name] = resolved
 
@@ -270,8 +294,18 @@ def step3_resolve(dry_run: bool) -> tuple:
             print(f"    … and {len(missing) - 20} more")
         return 0, 0, len(arxiv_entries), []
 
+    def _checkpoint():
+        """Persist progress mid-loop.
+
+        Resolving ~90 entries takes minutes of deliberate rate-limit sleeps. Both
+        files used to be written only at the very end, so a crash or a Ctrl-C
+        threw away every lookup the run had made and the next run repeated them.
+        """
+        save_attempts(attempts)
+        store.save()
+
     updates = []
-    for entry in arxiv_entries:
+    for i, entry in enumerate(arxiv_entries, 1):
         key      = entry["item_name"]
         arxiv_id = _get_arxiv_id(entry)
         label    = f"arXiv:{arxiv_id}" if arxiv_id else "(no arXiv ID)"
@@ -281,6 +315,8 @@ def step3_resolve(dry_run: bool) -> tuple:
         print(f"→ {source}")
         attempts[key] = attempts.get(key, 0) + 1
         updates.append((key, bib, source))
+        if i % 10 == 0:
+            _checkpoint()
         time.sleep(0.5)
 
     # Part B: table rows with no usable entry in orig.bib
@@ -289,7 +325,7 @@ def step3_resolve(dry_run: bool) -> tuple:
     not_found = []
     if missing_entries:
         print(f"\n  {len(missing_entries)} xlsx entry(ies) with no BibTeX key...")
-    for entry in missing_entries:
+    for i, entry in enumerate(missing_entries, 1):
         key = entry["item_name"]
         print(f"    [{key:<40}]", end=" ", flush=True)
         bib, source = resolve(entry["title"], None, key, "", store=store)
@@ -299,6 +335,8 @@ def step3_resolve(dry_run: bool) -> tuple:
             new_entries.append((key, bib))
         else:
             not_found.append((entry["title"][:70], key))
+        if i % 10 == 0:
+            _checkpoint()
         time.sleep(0.5)
 
     save_attempts(attempts)

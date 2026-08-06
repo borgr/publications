@@ -443,6 +443,35 @@ def titles_match(incoming, known):
     return matched is not None
 
 
+def duplicate_groups_by_identifier(store, keys_in_use=None):
+    """Return [[bib_key, ...]] for papers sharing an identifier.
+
+    Catches what `find_duplicate_titles` cannot: the same paper entered twice
+    under titles too different to match. Two real examples from this repo, both
+    of which were being emitted into the CV twice --
+
+        arXiv 2407.13696  "Benchmark Agreement Testing Done Right: A Guide..."
+                          "Do these LLM benchmarks agree? Fixing benchmark..."
+        arXiv 2408.12259  "Can You Trust Your Metric? Automatic Concatenation"
+                          "How Safe is Your Safety Metric? Automatic Conca..."
+
+    An identifier is a much stronger claim than a title, so this is the reliable
+    detector; titles are the fallback for papers with no identifier yet.
+    """
+    groups, seen = [], set()
+    for _field, _value, keys in store.shared_identifiers():
+        if keys_in_use is not None:
+            keys = [k for k in keys if k in keys_in_use]
+        if len(keys) < 2:
+            continue
+        signature = tuple(sorted(keys))
+        if signature in seen:
+            continue
+        seen.add(signature)
+        groups.append(list(signature))
+    return groups
+
+
 def find_duplicate_titles(row_names):
     """Return {normalized_title: [raw names]} for table rows that collide.
 

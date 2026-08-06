@@ -114,3 +114,135 @@ def test_find_duplicate_keys():
     text = BRACE_STYLE + "\n\n" + BRACE_STYLE
     assert find_duplicate_keys(parse_bibtex(text)) == {"example2024key": 2}
     assert find_duplicate_keys(parse_bibtex(BRACE_STYLE)) == {}
+
+
+# ── never write BibTeX we cannot read back ───────────────────────────────────
+#
+# A title containing an unbalanced brace produced an entry that did not parse,
+# and because the brace scan then ran past the entry's end it took the rest of
+# the file with it. One such title emptied an entire bibliography in testing.
+
+from bib_utils import (_entry_year, choose_published, escape_field_value,  # noqa: E402
+                       is_preprint, is_wellformed_entry, publication_rank)
+
+
+def test_escape_balances_a_stray_open_brace():
+    value = escape_field_value("A Title With An Unbalanced { Brace")
+    entry = f"@misc{{k,\n  title = {{{value}}},\n  year = {{2024}}\n}}"
+    assert is_wellformed_entry(entry, "k")
+
+
+def test_escape_balances_a_stray_close_brace():
+    value = escape_field_value("A Title With A } Brace")
+    entry = f"@misc{{k,\n  title = {{{value}}},\n  year = {{2024}}\n}}"
+    assert is_wellformed_entry(entry, "k")
+
+
+def test_escape_does_not_mangle_its_own_backslash_replacement():
+    assert escape_field_value(r"a \command") == r"a \textbackslash{}command"
+
+
+def test_escape_collapses_newlines_and_runs_of_space():
+    assert escape_field_value("a\n   b\tc") == "a b c"
+
+
+def test_escape_of_none_is_empty():
+    assert escape_field_value(None) == ""
+
+
+def test_wellformed_rejects_an_unparseable_entry():
+    assert not is_wellformed_entry("@article{k, title = {Broken {")
+
+
+def test_wellformed_rejects_two_entries():
+    assert not is_wellformed_entry(BRACE_STYLE + "\n\n" + NO_TRAILING_COMMA)
+
+
+def test_wellformed_rejects_a_titleless_entry():
+    assert not is_wellformed_entry("@misc{k, year = {2024}}")
+
+
+def test_wellformed_rejects_the_wrong_key():
+    assert not is_wellformed_entry(BRACE_STYLE, expected_key="someothername")
+    assert is_wellformed_entry(BRACE_STYLE, expected_key="example2024key")
+
+
+def test_wellformed_rejects_trailing_garbage():
+    """Content after the entry means the parser skipped something."""
+    assert not is_wellformed_entry(BRACE_STYLE + "\ntrailing junk here")
+
+
+def test_wellformed_accepts_a_quoted_acl_style_entry():
+    assert is_wellformed_entry(ACL_STYLE, "charpentier-etal-2025-findings")
+
+
+# ── prefer the published version ─────────────────────────────────────────────
+
+def test_published_outranks_preprint():
+    published = parse_bibtex(
+        '@inproceedings{a, title={T}, booktitle={ACL}, pages={1--9}}')[0]
+    preprint = parse_bibtex(
+        '@misc{b, title={T}, eprint={2401.1}, archivePrefix={arXiv}}')[0]
+    assert publication_rank(published) > publication_rank(preprint)
+
+
+def test_corr_article_outranked_by_real_journal():
+    corr = parse_bibtex('@article{a, title={T}, journal={CoRR}}')[0]
+    real = parse_bibtex('@article{b, title={T}, journal={Nature}, doi={10.1/x}}')[0]
+    assert publication_rank(real) > publication_rank(corr)
+
+
+def test_choose_published_is_order_independent():
+    entries = parse_bibtex(
+        '@misc{b, title={T}, archivePrefix={arXiv}}\n\n'
+        '@inproceedings{a, title={T}, booktitle={ACL}}')
+    forward, _ = choose_published(entries)
+    backward, _ = choose_published(list(reversed(entries)))
+    assert forward["item_name"] == backward["item_name"] == "a"
+
+
+def test_choose_published_on_empty_input():
+    assert choose_published([]) == (None, [])
+
+
+# ── which of several entries for one paper to keep ───────────────────────────
+
+def test_published_beats_a_newer_preprint():
+    """The version of record wins even when a preprint is more recent."""
+    pub = parse_bibtex('@inproceedings{a, title={T}, booktitle={ACL}, year={2024}}')[0]
+    pre = parse_bibtex('@misc{b, title={T}, archivePrefix={arXiv}, year={2025}}')[0]
+    winner, _ = choose_published([pre, pub])
+    assert winner["item_name"] == "a"
+
+
+def test_newer_preprint_wins_between_two_preprints():
+    """Two preprints of one paper are its v1 and v2; v2 has the current title.
+
+    Real case: "Can You Trust Your Metric?" (2024) and "How Safe is Your Safety
+    Metric?" (2025) share one arXiv ID. Keeping the 2024 row printed a title the
+    authors had replaced.
+    """
+    old = parse_bibtex(
+        '@article{a, title={Old Title}, journal={arXiv preprint}, year={2024}}')[0]
+    new = parse_bibtex('@misc{b, title={New Title}, year={2025}}')[0]
+    winner, _ = choose_published([old, new])
+    assert winner["item_name"] == "b"
+
+
+def test_is_preprint_classification():
+    def one(src):
+        return is_preprint(parse_bibtex(src)[0])
+    assert not one('@inproceedings{a, title={T}, booktitle={ACL}}')
+    assert not one('@article{a, title={T}, journal={Nature}}')
+    assert one('@article{a, title={T}, journal={CoRR}}')
+    assert one('@article{a, title={T}, journal={arXiv preprint arXiv:2401.1}}')
+    assert one('@misc{a, title={T}, archivePrefix={arXiv}}')
+    assert one('@misc{a, title={T}}')
+
+
+def test_choose_published_is_stable_when_everything_ties():
+    entries = parse_bibtex('@misc{bbb, title={T}, year={2024}}\n\n'
+                           '@misc{aaa, title={T}, year={2024}}')
+    first, _ = choose_published(entries)
+    second, _ = choose_published(list(reversed(entries)))
+    assert first["item_name"] == second["item_name"]

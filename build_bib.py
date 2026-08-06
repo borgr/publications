@@ -8,7 +8,8 @@ import pandas as pd
 from bib_utils import (choose_published, find_duplicate_keys, normalize_text,
                        parse_bibtex, publication_rank, read_df)
 from citations_io import read_citation_rows
-from identity import IdentityStore, find_duplicate_titles, join_citations
+from identity import (IdentityStore, duplicate_groups_by_identifier,
+                      find_duplicate_titles, join_citations)
 from venues import Venues
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -23,6 +24,7 @@ RELEVANT_TAGS = {
 _VENUES = Venues.load()
 JOURNALS = _VENUES.journals
 CONFERENCES = _VENUES.conferences
+NON_RANKED = _VENUES.non_ranked
 
 _VENUE_SPLIT_RE = re.compile(r'[2\-*^(]')
 
@@ -163,6 +165,10 @@ def _categorize(venue_simple, is_arxiv, is_review, is_workshop):
         return "journals"
     if venue_simple in CONFERENCES:
         return "conferences"
+    if venue_simple in NON_RANKED:
+        # A real outlet with no ranking (a blog post): non-reviewed, and
+        # deliberately not a "cannot categorise" warning.
+        return "drafts"
     return None
 
 
@@ -303,6 +309,20 @@ def resolve_duplicate_rows(parsed, df):
     """
     by_key = {e["item_name"]: e for e in parsed}
     suppressed, notes = set(), []
+
+    # Papers sharing an identifier. A stronger signal than a title, and it finds
+    # retitled duplicates that title comparison cannot -- two such papers were
+    # being emitted into the CV twice.
+    rows_with_key = {str(v).strip() for v in df["Bib"].dropna()}
+    for keys in duplicate_groups_by_identifier(IdentityStore.load(), rows_with_key):
+        entries = [by_key[k] for k in keys if k in by_key]
+        if len(entries) < 2:
+            continue
+        winner, losers = choose_published(entries)
+        for loser in losers:
+            suppressed.add(loser["item_name"])
+        notes.append((winner["item_name"], [l["item_name"] for l in losers],
+                      publication_rank(winner)))
 
     for names in find_duplicate_titles(df["Name"].dropna()).values():
         entries, rows_without_entry = [], []

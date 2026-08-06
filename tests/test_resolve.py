@@ -272,3 +272,52 @@ def test_doi_source_may_replace_an_existing_entry():
         PREPRINT, [("doe2024preprint", replacement, "DOI (clibib)")], [])
     assert replaced == 1
     assert "Published Version" in text
+
+
+# ── regex replacement must never be treated as a template ────────────────────
+#
+# A real run died with `re.error: bad escape \i` after making every lookup,
+# because re.sub parses its *replacement* for escapes and BibTeX is full of
+# backslashes. All of the run's work was lost.
+
+LATEX_HEAVY = (r'@inproceedings{doe2024preprint,' "\n"
+               r'  title = {Mod{\`e}les de langue: an {\it italic} study},' "\n"
+               r'  author = {Rapha{\"e}l Doe and Jos{\'e} Roe},' "\n"
+               r'  booktitle = {ACL},' "\n"
+               r'  year = {2024}' "\n"
+               r'}')
+
+
+def test_replacement_containing_latex_escapes_does_not_raise():
+    text, replaced, _ = update_bib_inplace(
+        PREPRINT, [("doe2024preprint", LATEX_HEAVY, "DBLP")], [])
+    assert replaced == 1
+    assert r'{\it italic}' in text
+    assert "A Preprint" not in text
+
+
+def test_appending_an_entry_with_latex_escapes_does_not_raise():
+    entry = LATEX_HEAVY.replace("doe2024preprint", "new2024latex")
+    text, _, appended = update_bib_inplace(PUBLISHED, [], [("new2024latex", entry)])
+    assert appended == 1
+    assert {e["item_name"] for e in parse_bibtex(text)} == {"doe2024paper", "new2024latex"}
+
+
+def test_replace_key_handles_latex_escapes():
+    out = resolve_arxiv._replace_key(LATEX_HEAVY, "renamed2024key")
+    assert out.startswith("@inproceedings{renamed2024key,")
+    assert r'{\`e}' in out
+
+
+def test_replace_key_preserves_a_key_with_punctuation():
+    src = '@article{DBLP:journals/corr/abs-2404-1, title = {T}}'
+    assert resolve_arxiv._replace_key(src, "DBLP:conf/acl/X24").startswith(
+        "@article{DBLP:conf/acl/X24,")
+
+
+def test_a_backslash_heavy_entry_survives_a_full_round_trip():
+    """The invariant: what goes in must parse back out identically."""
+    text, replaced, _ = update_bib_inplace(
+        PREPRINT, [("doe2024preprint", LATEX_HEAVY, "DBLP")], [])
+    (entry,) = [e for e in parse_bibtex(text) if e["item_name"] == "doe2024preprint"]
+    assert "italic" in entry["title"]

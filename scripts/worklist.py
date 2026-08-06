@@ -272,13 +272,22 @@ def gather():
             [f"- `{key}` <- {raw[:80]}" for (raw, key), _ in sorted(truncated.items())],
             nature=INFORMATIONAL))
 
-    shared = store.shared_identifiers()
+    # Only report a shared identifier when both keys are actually in use. A key
+    # with no table row is not emitted into the CV, so it is a stale record in
+    # identity.json rather than something to act on -- reporting those made the
+    # section stay red after dedupe.py had already fixed the real cases.
+    keys_in_use = {str(v).strip() for v in df["Bib"].dropna()
+                   if str(v).strip().lower() not in ("", "nan", "none")}
+    shared = [(field, value, [k for k in keys if k in keys_in_use])
+              for field, value, keys in store.shared_identifiers()]
+    shared = [(f, v, k) for f, v, k in shared if len(k) > 1]
     if shared:
         sections.append(Section(
-            f"One identifier claimed by two papers ({len(shared)})",
-            "Two BibTeX keys carry the same Scholar ID or DOI, which means the "
-            "same paper is recorded twice. Usually a duplicate row that "
-            "scripts/dedupe.py can remove.",
+            f"One identifier claimed by two papers in the CV ({len(shared)})",
+            "Two rows carry the same Scholar ID or DOI, so the same paper is "
+            "listed twice -- and because the titles differ, no title comparison "
+            "catches it. `python scripts/dedupe.py` resolves these, keeping the "
+            "published version.",
             [f"- {field} `{value}` on: {', '.join(keys)}"
              for field, value, keys in shared], nature=ONE_OFF))
 
@@ -336,8 +345,16 @@ def main():
     sections, total, result = gather()
 
     if args.check:
-        print(f"{total} open item(s) across {len(sections)} section(s)")
-        return 1 if total else 0
+        # Only sections that need a decision count as a failure. Informational
+        # and self-resolving ones would make --check permanently red and
+        # therefore ignored.
+        actionable = [s for s in sections if s.nature in (ONE_OFF, RECURRING)]
+        items = sum(len(s.lines) for s in actionable)
+        print(f"{items} actionable item(s) in {len(actionable)} section(s) "
+              f"({total} total across {len(sections)})")
+        for s in actionable:
+            print(f"  [{s.nature[0]}] {s.title}")
+        return 1 if items else 0
 
     text = render(sections, result)
     previous = ""

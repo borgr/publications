@@ -56,6 +56,15 @@ class Venues:
     def description(self, key):
         return ((self.venues.get(key) or {}).get("description") or "")
 
+    @property
+    def non_ranked(self):
+        """Venues that are real but have no ranking -- blogs, non-archival outlets.
+
+        Known (so never reported as missing) and describable by nothing (so no
+        `venueinf` sentence is emitted), with papers filed as non-reviewed.
+        """
+        return {k for k, v in self.venues.items() if (v or {}).get("kind") == "other"}
+
     def known(self, key):
         return key in self.venues
 

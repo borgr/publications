@@ -200,3 +200,15 @@ venues:
     kind: conference
     manual: true
     description: New conference, but with many top-tier papers and a very competitive acceptance rate.
+
+  # ── Non-archival outlets ────────────────────────────────────────────────────
+  # `kind: other` means "a real outlet, but not one with a ranking". It is a
+  # known venue, so it is not reported as missing; it prints no `venueinf`
+  # sentence, because there is no ranking to state; and its papers are filed
+  # under non-reviewed work. Without this a blog post is indistinguishable from
+  # a venue nobody has configured yet, so it reappears on the worklist forever.
+  blog:
+    match:
+      - blog post
+    kind: other
+    manual: true
