@@ -472,7 +472,11 @@ _OUTER_FILES = [
     "WORKLIST.md",
     "overleaf",  # submodule pointer
 ]
-_OVERLEAF_FILES = ["main.tex", "Wzmn.bib"]
+# The .bst files are here because patch_bst_author() edits them: a fork that
+# changes AUTHOR_NAME has its name-bolding style rewritten on disk, and leaving
+# that out of the push meant the fix never reached the project that compiles.
+_OVERLEAF_FILES = ["main.tex", "Wzmn.bib",
+                   "planyr-rev.bst", "planyr.bst", "iclr-based.bst"]
 
 
 def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: str) -> bool:
