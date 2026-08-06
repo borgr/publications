@@ -90,42 +90,99 @@ _STATS_RE   = re.compile(r'\\textbf\{Citations\t(\d+)\nh-index\t(\d+)\n\}')
 _AUTHOR_LINE_RE = re.compile(r'(\\noindent\\today\n\n?)([^\n]+)(\n\\textbf\{Citations)', re.MULTILINE)
 
 
-def patch_bst_author(author_name: str = None) -> None:
-    """Replace hardcoded author name in all BST files in overleaf/ from config."""
+def patch_bst_author(author_name: str = None) -> list:
+    """Point the BST files' name-bolding at config.AUTHOR_NAME.
+
+    Returns a list of problems. Not fatal -- the CV still compiles, it just
+    bolds the wrong name or nobody -- but it must be visible, because the failure
+    is invisible in every other way: the run succeeds and only the rendered PDF
+    is wrong.
+
+    Verifies afterwards rather than trusting the substitution, which is what
+    caught two silent no-ops: a name the finder could not re-match (renaming away
+    from "Jean-Paul Sartre" did nothing) and a BST with no recognisable pattern.
+    """
     if author_name is None:
         author_name = config.AUTHOR_NAME
-    author_first = author_name.split()[0]
-    author_last  = author_name.split()[-1]
+    parts = author_name.split()
+    author_first, author_last = (parts[0], parts[-1]) if parts else ("", "")
+
+    problems = []
     for bst_name in _BST_FILES:
         bst_path = os.path.join(OVERLEAF_DIR, bst_name)
         if not os.path.exists(bst_path):
             continue
         with open(bst_path) as f:
             original = f.read()
+
         patched = original
-        # Replace any full-name string literal (catches comparisons and formatted output)
-        for old_name in _find_author_names_in_bst(patched):
-            patched = patched.replace(f'"{old_name}"', f'"{author_name}"')
-            # Also fix first/last in format.name$ purify$ comparisons
-            old_first = old_name.split()[0]
-            old_last  = old_name.split()[-1]
-            patched = patched.replace(
-                f'format.name$ purify$ "{old_first}" =',
-                f'format.name$ purify$ "{author_first}" ='
-            )
-            patched = patched.replace(
-                f'format.name$ purify$ "{old_last}" =',
-                f'format.name$ purify$ "{author_last}" ='
-            )
+        found = _find_author_names_in_bst(patched)
+        for old_name in found:
+            if old_name == author_name:
+                continue
+            # Everywhere, not only where the name is the whole quoted value. The
+            # name also appears *inside* the strings the style emits --
+            # `"\textbf{\emph{Old Name}\textsuperscript{st}}"` -- and replacing
+            # only `"Old Name"` left those, so a fork's bibliography printed the
+            # original author's name in bold on every one of the fork's papers.
+            patched = patched.replace(old_name, author_name)
+            old_parts = old_name.split()
+            for old_part, new_part in ((old_parts[0], author_first),
+                                       (old_parts[-1], author_last)):
+                patched = patched.replace(
+                    f'format.name$ purify$ "{old_part}" =',
+                    f'format.name$ purify$ "{new_part}" =')
+
         if patched != original:
             with open(bst_path, "w") as f:
                 f.write(patched)
             print(f"  Patched author name in {bst_name}")
 
+        # Verify rather than trust: the configured name must be present, and no
+        # previous author's name may remain anywhere in the file.
+        if f'"{author_name}"' not in patched:
+            problems.append(
+                f"{bst_name} does not reference {author_name!r}, so your name "
+                f"will not be bolded in the bibliography"
+                + (f" (it still names {found[0]!r})" if found else
+                   " (no `t \"Name\" =` comparison found to replace)"))
+        # Any trace of a previous author's name -- full, or first/last as a whole
+        # word. `iclr-based.bst` carries a `format.name.bold` that names the parts
+        # as bare identifiers, which no quoted-string replacement reaches.
+        stragglers = set()
+        for old_name in found:
+            if old_name == author_name:
+                continue
+            if old_name in patched:
+                stragglers.add(old_name)
+            for part in {old_name.split()[0], old_name.split()[-1]}:
+                if len(part) > 3 and re.search(r'\b' + re.escape(part) + r'\b',
+                                               patched):
+                    stragglers.add(part)
+        if stragglers:
+            problems.append(
+                f"{bst_name} still mentions {sorted(stragglers)} after renaming "
+                f"to {author_name!r} — that style would bold the wrong name. "
+                f"main.tex selects its style with \\defaultbibliographystyle, so "
+                f"this only matters if you switch to it.")
+    return problems
+
+
+# BibTeX keywords that appear in the same comparison position as a name.
+_BST_NON_NAMES = {"others", "et al.", "and others"}
+
 
 def _find_author_names_in_bst(bst_text: str) -> list:
-    """Extract author full-name strings used in name comparisons (t "Name" = pattern)."""
-    return re.findall(r't "([A-Z][a-z]+ [A-Z][a-z]+)" =', bst_text)
+    """Author names used in the BST's name comparisons (`t "Name" =`).
+
+    Deliberately permissive about name shape. The previous pattern was
+    `[A-Z][a-z]+ [A-Z][a-z]+`, which cannot match a hyphenated, accented,
+    single-word or three-part name -- so once the file had been renamed to one of
+    those, every later rename silently did nothing. `"others"` and friends sit in
+    the same position and are excluded by name.
+    """
+    return [n for n in re.findall(r't\s+"([^"]{2,80})"\s*=', bst_text)
+            if n.strip().lower() not in _BST_NON_NAMES]
 
 
 def _update_author_name_in_tex(tex: str):
@@ -232,7 +289,8 @@ def main(cats: BibCategories = None):
     if problem:
         raise FileNotFoundError(problem)
 
-    patch_bst_author()
+    for bst_problem in patch_bst_author():
+        print(f"  Warning: {bst_problem}")
 
     if cats is None:
         cats = build_bib.main()

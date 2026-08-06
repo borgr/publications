@@ -246,3 +246,22 @@ def test_choose_published_is_stable_when_everything_ties():
     first, _ = choose_published(entries)
     second, _ = choose_published(list(reversed(entries)))
     assert first["item_name"] == second["item_name"]
+
+
+# ── editing a field without assuming its delimiter ───────────────────────────
+
+from bib_utils import find_field_span  # noqa: E402
+
+
+def test_find_field_span_reports_the_delimiter():
+    assert find_field_span('title = {Braced}', "title") == (9, 15, '{')
+    assert find_field_span('title = "Quoted"', "title") == (9, 15, '"')
+    assert find_field_span('year = 2024,', "year")[2] == ''
+    assert find_field_span('author = {Doe}', "title") is None
+
+
+def test_find_field_span_balances_nested_braces():
+    content = 'title = {A {Nested} Title}, year = {2024}'
+    start, end, delim = find_field_span(content, "title")
+    assert content[start:end] == "A {Nested} Title"
+    assert delim == '{'

@@ -109,6 +109,40 @@ def extract_field(content, field):
     return ""
 
 
+def find_field_span(content, field):
+    """Locate a field's value. Returns (start, end, delimiter) or None.
+
+    `start`/`end` bound the value *inside* its delimiters, and `delimiter` is
+    "{" or '"' (or "" for a bare value). Lets a caller edit a field's value
+    without assuming which delimiter it uses -- the assumption that cost
+    `shorten_booktitle` correctness on quoted ACL Anthology entries, where it
+    replaced the closing quote with a brace and produced unparseable BibTeX.
+    """
+    for m in re.finditer(r'\b' + re.escape(field) + r'\s*=\s*', content, re.IGNORECASE):
+        pos = m.end()
+        if pos >= len(content):
+            continue
+        if content[pos] == '{':
+            close = _find_matching_brace(content, pos)
+            if close == -1:
+                continue
+            return pos + 1, close, '{'
+        if content[pos] == '"':
+            i = pos + 1
+            while i < len(content):
+                if content[i] == '\\':
+                    i += 2
+                    continue
+                if content[i] == '"':
+                    return pos + 1, i, '"'
+                i += 1
+            continue
+        m2 = re.match(r'([^,\n}]+)', content[pos:])
+        if m2:
+            return pos, pos + len(m2.group(1)), ''
+    return None
+
+
 def parse_bibtex(bib_string):
     """Parse BibTeX into entry dicts.
 

@@ -205,3 +205,62 @@ def test_every_live_venue_string_still_resolves_the_same_way():
     # 64 of the live strings resolve to a configured venue; a drop means the
     # truncation rule or a match phrase regressed.
     assert known >= 64, f"only {known} venue strings resolve to a known venue"
+
+
+# ── rewriting entry text ─────────────────────────────────────────────────────
+
+def test_shorten_booktitle_trims_a_braced_tail():
+    out = build_bib.shorten_booktitle('\n  booktitle = {NeurIPS 2024 Competition Track},\n')
+    assert out.strip() == "booktitle = {NeurIPS 2024},"
+
+
+def test_shorten_booktitle_leaves_a_quoted_field_alone():
+    """The ACL Anthology quotes its booktitles, and its full names are wanted.
+
+    The old regex assumed a closing `}`; when it did match a quoted field it
+    replaced the closing quote with a brace and produced unparseable BibTeX.
+    """
+    src = '\n  booktitle = "Proceedings of the 2024 Conference on EMNLP",\n'
+    assert build_bib.shorten_booktitle(src) == src
+
+
+def test_shorten_booktitle_output_always_still_parses():
+    from bib_utils import is_wellformed_entry
+    for value in ('{ACL 2024, Bangkok}', '"ACL 2024, Bangkok"',
+                  '{Findings of the {ACL} 2024, Bangkok}', '{No year here}'):
+        entry = ('@inproceedings{k,\n  title = {T},\n  booktitle = '
+                 + value + ',\n  year = {2024}\n}')
+        assert is_wellformed_entry(build_bib.shorten_booktitle(entry), "k"), value
+
+
+def test_shorten_booktitle_with_no_booktitle_is_a_no_op():
+    src = '\n  title = {A Paper},\n  year = {2024},\n'
+    assert build_bib.shorten_booktitle(src) == src
+
+
+def test_remove_pretitle_tags_handles_braces_in_the_tag():
+    """`[^}]*}` stopped at the first inner brace and left the field behind."""
+    src = '@x{k,\n    pretitle={\\CMD{x}},\n  title = {A Paper},\n}'
+    out = build_bib.remove_pretitle_tags(src)
+    assert "pretitle" not in out
+    assert "title = {A Paper}" in out
+
+
+def test_remove_pretitle_tags_is_a_no_op_when_absent():
+    src = '@x{k,\n  title = {A Paper},\n}'
+    assert build_bib.remove_pretitle_tags(src) == src
+
+
+def test_the_live_bibliography_is_entirely_parseable():
+    """Every entry in the generated CV bibliography must re-parse standalone."""
+    import os
+    from bib_utils import is_wellformed_entry, parse_bibtex
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "overleaf", "Wzmn.bib")
+    if not os.path.exists(path):
+        pytest.skip("overleaf submodule not checked out")
+    entries = parse_bibtex(open(path).read())
+    assert entries
+    bad = [e["item_name"] for e in entries
+           if not is_wellformed_entry(e["beg"] + e["rest"], e["item_name"])]
+    assert bad == [], bad

@@ -148,7 +148,7 @@ def test_main_refuses_to_write_a_partially_updated_document(tmp_path, monkeypatc
     broken = TEX.replace("\\chapter*{Review Papers}", "\\chapter*{Reviews}")
     tex_path.write_text(broken, encoding="utf-8")
     monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(tex_path))
-    monkeypatch.setattr(rebuild_tex, "patch_bst_author", lambda *a, **k: None)
+    monkeypatch.setattr(rebuild_tex, "patch_bst_author", lambda *a, **k: [])
 
     with pytest.raises(TexUpdateError) as excinfo:
         rebuild_tex.main(CATS)
@@ -160,7 +160,7 @@ def test_main_writes_when_everything_resolves(tmp_path, monkeypatch, stats):
     tex_path = tmp_path / "main.tex"
     tex_path.write_text(TEX, encoding="utf-8")
     monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(tex_path))
-    monkeypatch.setattr(rebuild_tex, "patch_bst_author", lambda *a, **k: None)
+    monkeypatch.setattr(rebuild_tex, "patch_bst_author", lambda *a, **k: [])
     rebuild_tex.main(CATS)
     assert "\\nocite{j1,j2}" in tex_path.read_text(encoding="utf-8")
 
@@ -214,3 +214,144 @@ def test_nocite_formatting():
 def test_bst_author_name_extraction():
     assert _find_author_names_in_bst('t "Leshem Choshen" =') == ["Leshem Choshen"]
     assert _find_author_names_in_bst("no names here") == []
+
+
+# ── the BST author-bolding rename ────────────────────────────────────────────
+#
+# Two silent no-ops lived here. The finder pattern was `[A-Z][a-z]+ [A-Z][a-z]+`,
+# so once a file had been renamed to a hyphenated, accented, single-word or
+# three-part name, every later rename did nothing. And a BST with no recognisable
+# pattern was skipped without a word. Either way the CV compiles and bolds the
+# wrong name, so nothing but the rendered PDF shows it.
+
+BST = '''FUNCTION {bold.author}
+{ duplicate$ t "Leshem Choshen" = { bold } if$ }
+FUNCTION {check.first}
+{ s #1 "{ff}" format.name$ purify$ "Leshem" = }
+FUNCTION {check.last}
+{ s #1 "{ll}" format.name$ purify$ "Choshen" = }
+FUNCTION {handle.others}
+{ t "others" = { "et~al." } if$ }
+'''
+
+
+@pytest.fixture
+def bst_dir(tmp_path, monkeypatch):
+    for name in rebuild_tex._BST_FILES:
+        (tmp_path / name).write_text(BST, encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "OVERLEAF_DIR", str(tmp_path))
+    return tmp_path
+
+
+def _text(bst_dir, name="planyr-rev.bst"):
+    return (bst_dir / name).read_text(encoding="utf-8")
+
+
+def test_rename_replaces_full_first_and_last(bst_dir):
+    assert rebuild_tex.patch_bst_author("Ada Lovelace") == []
+    out = _text(bst_dir)
+    assert '"Ada Lovelace"' in out
+    assert 'purify$ "Ada" =' in out
+    assert 'purify$ "Lovelace" =' in out
+    assert "Choshen" not in out
+
+
+def test_rename_is_idempotent(bst_dir):
+    rebuild_tex.patch_bst_author("Ada Lovelace")
+    first = _text(bst_dir)
+    assert rebuild_tex.patch_bst_author("Ada Lovelace") == []
+    assert _text(bst_dir) == first
+
+
+def test_the_others_keyword_is_not_mistaken_for_a_name(bst_dir):
+    """It sits in the same comparison position as the author's name."""
+    rebuild_tex.patch_bst_author("Ada Lovelace")
+    assert 't "others" =' in _text(bst_dir)
+
+
+@pytest.mark.parametrize("name", [
+    "Jean-Paul Sartre",     # hyphen
+    "José Ángel Ríos",      # accents, three parts
+    "Aristotle",            # one word
+    "Ada B. Lovelace",      # initial with a period
+    "Zhang Wei",
+])
+def test_renaming_twice_works_for_any_name_shape(bst_dir, name):
+    """Renaming *away from* one of these used to silently do nothing."""
+    assert rebuild_tex.patch_bst_author(name) == []
+    assert rebuild_tex.patch_bst_author("Marie Curie") == []
+    out = _text(bst_dir)
+    assert '"Marie Curie"' in out
+    assert f'"{name}"' not in out
+
+
+def test_a_bst_with_no_name_comparison_is_reported(bst_dir):
+    (bst_dir / "planyr.bst").write_text("ENTRY { author } {} {}\n", encoding="utf-8")
+    problems = rebuild_tex.patch_bst_author("Ada Lovelace")
+    assert any("planyr.bst" in p and "not be bolded" in p for p in problems)
+
+
+def test_an_absent_bst_file_is_not_a_problem(bst_dir):
+    (bst_dir / "iclr-based.bst").unlink()
+    assert rebuild_tex.patch_bst_author("Ada Lovelace") == []
+
+
+def test_the_live_bst_files_reference_the_configured_author():
+    """A real run must not silently lose its name bolding."""
+    if not os.path.isdir(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "overleaf")):
+        pytest.skip("overleaf submodule not checked out")
+    problems = rebuild_tex.patch_bst_author()
+    assert problems == [], problems
+
+
+# ── the fork bug: a renamed style must not still bold the original author ────
+
+BST_WITH_OUTPUT = '''FUNCTION {bold.author}
+{ duplicate$ t "Leshem Choshen" = { bold } if$ }
+FUNCTION {emit}
+{ { "\\textbf{\\emph{Leshem Choshen}\\textsuperscript{st}}" 't := }
+  { "\\textbf{Leshem Choshen}" 't := } if$ }
+FUNCTION {check.first}
+{ s #1 "{ff}" format.name$ purify$ "Leshem" = }
+FUNCTION {handle.others}
+{ t "others" = { "et~al." } if$ }
+'''
+
+
+@pytest.fixture
+def bst_with_output(tmp_path, monkeypatch):
+    for name in rebuild_tex._BST_FILES:
+        (tmp_path / name).write_text(BST_WITH_OUTPUT, encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "OVERLEAF_DIR", str(tmp_path))
+    return tmp_path
+
+
+def test_the_name_inside_emitted_strings_is_replaced(bst_with_output):
+    """The name also lives inside the strings the style prints.
+
+    Replacing only `"Old Name"` as a whole quoted value left
+    `"\\textbf{\\emph{Old Name}...}"` untouched, so a fork's bibliography printed
+    the original author's name in bold on every one of the fork's own papers.
+    """
+    assert rebuild_tex.patch_bst_author("Ada Lovelace") == []
+    out = (bst_with_output / "planyr-rev.bst").read_text(encoding="utf-8")
+    assert "Leshem" not in out and "Choshen" not in out
+    assert out.count("Ada Lovelace") >= 3, "comparison and both emitted strings"
+    assert r"\textbf{Ada Lovelace}" in out
+
+
+def test_a_straggling_old_name_is_reported(bst_with_output):
+    """A style naming the parts as bare identifiers cannot be reached by
+    quoted-string replacement, so it must at least be surfaced."""
+    (bst_with_output / "iclr-based.bst").write_text(
+        BST_WITH_OUTPUT + '\nFUNCTION {f} { s Leshem "{\\bf " * s * "}" * }\n',
+        encoding="utf-8")
+    problems = rebuild_tex.patch_bst_author("Ada Lovelace")
+    assert any("iclr-based.bst" in p and "Leshem" in p for p in problems)
+
+
+def test_renaming_to_the_same_name_is_a_no_op(bst_with_output):
+    rebuild_tex.patch_bst_author("Leshem Choshen")
+    assert (bst_with_output / "planyr-rev.bst").read_text(encoding="utf-8") \
+        == BST_WITH_OUTPUT

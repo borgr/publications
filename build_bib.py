@@ -5,8 +5,8 @@ from typing import NamedTuple
 
 import pandas as pd
 
-from bib_utils import (choose_published, find_duplicate_keys, normalize_text,
-                       parse_bibtex, publication_rank, read_df)
+from bib_utils import (choose_published, find_duplicate_keys, find_field_span,
+                       normalize_text, parse_bibtex, publication_rank, read_df)
 from citations_io import read_citation_rows
 from identity import (IdentityStore, duplicate_groups_by_identifier,
                       find_duplicate_titles, join_citations)
@@ -58,11 +58,65 @@ def extract_tags_str(row):
 
 
 def remove_pretitle_tags(s):
-    return re.sub(r'\s*pretitle\s*=[^}]*},\s*', '', s)
+    """Strip a previously-emitted `pretitle={...}` field.
+
+    Brace-aware, so a tag value that itself contains braces is still removed;
+    the old `[^}]*}` stopped at the first inner brace and left the field behind.
+    """
+    span = find_field_span(s, "pretitle")
+    if span is None:
+        return s
+    start, end, _delim = span
+    field_start = s.rfind("pretitle", 0, start)
+    if field_start == -1:
+        return s
+    # Take the leading whitespace and the trailing delimiter/comma/newline with it.
+    while field_start > 0 and s[field_start - 1] in " \t\n":
+        field_start -= 1
+    tail = end + 1
+    while tail < len(s) and s[tail] in ",\n \t":
+        tail += 1
+    return s[:field_start] + "\n    " + s[tail:] if s[:field_start] else s[tail:]
+
+
+_YEAR_IN_BOOKTITLE_RE = re.compile(r'\d{4}')
 
 
 def shorten_booktitle(s):
-    return re.sub(r'(\s*booktitle\s*=.*?\d{4})(.*?)(}\s*,\s*\n)', r'\1\3', s, flags=re.DOTALL)
+    """Trim a booktitle after its year, dropping the city/pages tail.
+
+    Edits the value inside whatever delimiter the field uses. The previous regex
+    assumed a closing `}` and, on a quoted booktitle -- which is how the ACL
+    Anthology exports them -- replaced the closing quote with a brace, producing
+    BibTeX that does not parse. Not reachable in the current data, but the
+    parser now accepts quoted fields, so the shape is one paste away.
+    """
+    span = find_field_span(s, "booktitle")
+    if span is None:
+        return s
+    start, end, delim = span
+    # Braced fields only. This is deliberately the pre-existing behaviour, which
+    # differed by delimiter purely by accident: the old regex needed a closing `}`
+    # and so never matched a quoted field. Keeping that split is the right call
+    # rather than a coincidence -- DBLP and OpenReview brace their booktitles and
+    # append a verbose tail worth trimming ("NeurIPS 2024 Competition Track"),
+    # while the ACL Anthology quotes them and its full names are worth keeping
+    # ("Proceedings of the 2024 Conference on EMNLP", where the year sits
+    # mid-name and cutting there would destroy it).
+    #
+    # The bug being fixed is that the old regex, when it *did* match a quoted
+    # field, replaced its closing quote with a brace and produced BibTeX that
+    # does not parse. Going through the field's real extent cannot do that.
+    if delim != '{':
+        return s
+    value = s[start:end]
+    matches = list(_YEAR_IN_BOOKTITLE_RE.finditer(value))
+    if not matches:
+        return s
+    cut = matches[0].end()
+    if cut >= len(value.rstrip()):
+        return s
+    return s[:start] + value[:cut] + s[end:]
 
 
 def simplify_venue(name):
