@@ -122,9 +122,20 @@ compiles matches the committed data — the failure that motivated it was a run 
 `--no-push` runs that left Overleaf hundreds of citations behind while every run
 reported success.
 
-1. In Overleaf: **Menu → Git**, and copy the URL with its token.
-2. In GitHub: **Settings → Secrets and variables → Actions → New repository
-   secret**, named `OVERLEAF_GIT_URL`.
+1. In Overleaf: **Account Settings → Git integration** for a token, and
+   **Menu → Git** for the project URL. They are separate — the URL Overleaf
+   shows you carries no credential, and cloning it in CI fails asking for a
+   password.
+2. Combine them into one URL with the token as the password, and store that as
+   a GitHub repository secret named `OVERLEAF_GIT_URL` (**Settings → Secrets
+   and variables → Actions → New repository secret**):
+
+   ```
+   https://git:YOUR_TOKEN@git.overleaf.com/YOUR_PROJECT_ID
+   ```
+
+   Use a token generated for this, not whatever your local clone
+   authenticates with, so revoking CI's access does not break your own pushes.
 
 CI then rebuilds the CV from the committed data and **fails if Overleaf would
 compile something different**. To have CI push the fix rather than just report

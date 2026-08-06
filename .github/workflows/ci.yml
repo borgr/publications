@@ -143,7 +143,13 @@ jobs:
           OVERLEAF_GIT_URL: ${{ secrets.OVERLEAF_GIT_URL }}
         run: |
           # --quiet, and the URL only ever via the environment: it carries a token.
-          git clone --quiet --depth 1 "$OVERLEAF_GIT_URL" overleaf
+          # GIT_TERMINAL_PROMPT=0 so a credential-less URL fails immediately
+          # instead of blocking on a password prompt no one can answer.
+          if ! GIT_TERMINAL_PROMPT=0 git clone --quiet --depth 1 "$OVERLEAF_GIT_URL" overleaf 2>clone.err; then
+            sed -E 's#//[^@]*@#//***@#g' clone.err
+            echo "::error title=Cannot reach Overleaf::Cloning the project failed. The most common cause is a URL with no token in it: Overleaf shows the project URL and the git token separately, and OVERLEAF_GIT_URL needs both, as https://git:TOKEN@git.overleaf.com/PROJECT_ID. See the README."
+            exit 1
+          fi
 
       - name: Rebuild the CV from committed data
         if: steps.cfg.outputs.configured == 'true'
