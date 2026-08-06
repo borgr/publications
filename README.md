@@ -74,10 +74,18 @@ The step scripts (`fetch_citations.py`, `build_bib.py`, `rebuild_tex.py`,
 ## Setting it up
 
 ```bash
-git clone --recurse-submodules https://github.com/borgr/publications.git
+git clone https://github.com/borgr/publications.git
 cd publications
 pip install -r requirements.txt
+python init_new_author.py --overleaf-url <your-overleaf-git-url>
 ```
+
+Note the plain `clone`: **not** `--recurse-submodules`. `overleaf/` is a
+submodule pointing at the original author's Overleaf project, which you have no
+credentials for, so recursing aborts the whole clone with `could not read
+Password`. `init_new_author.py` repoints it at yours and clears the personal
+data; run it with `--overleaf-url` and it does both in one step. Until then the
+`overleaf/` directory is simply empty, and every step except the push works.
 
 Then edit `config.py` — that is the only file that is author-specific:
 
@@ -147,6 +155,29 @@ racing does not fail the run.
 With no secret set, the job prints how to enable itself and passes — a fork is
 never red for a project it does not have. The same staleness is reported locally
 in `WORKLIST.md`, which needs no credentials.
+
+#### What a fork can and cannot see
+
+The token is never in the repository, so forking this project cannot hand
+anybody your Overleaf account. Concretely:
+
+- **Nothing committed carries a credential.** `tests/test_no_secrets.py` fails
+  the build if one ever is, so this is checked rather than asserted.
+- **Secrets do not travel with a fork.** They live in your repository's
+  settings, encrypted, and GitHub will not read one back to you either — only
+  overwrite it. A fork starts with none, which is why the job is written to pass
+  when it finds none.
+- **A pull request from a fork gets no secrets**, by GitHub's design, so a PR
+  that edits the workflow to print the token cannot: the job is also skipped on
+  `pull_request` outright.
+- **Logs are scrubbed.** GitHub masks any registered secret's value in output,
+  the URL is passed only through the environment, and the clone step redacts
+  `//…@` out of git's own error text before printing it.
+
+What *is* public is the project **URL** in `.gitmodules`
+(`https://git@git.overleaf.com/<project-id>`). That is an address, not a key:
+cloning it without the token fails, which is exactly what the plain-`clone`
+instruction above is about.
 
 ## Files
 
