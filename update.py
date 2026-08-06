@@ -577,7 +577,7 @@ def step7_push(dry_run: bool) -> bool:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         description="Update the publications pipeline end-to-end",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -609,7 +609,7 @@ Companion commands, none needed routinely:
                         help="Do not post a desktop/CI notification on failure")
     parser.add_argument("--user", default=None,
                         help="Google Scholar user ID (passed to fetch_citations.py)")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     problems = preflight()
     if problems:
