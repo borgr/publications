@@ -26,7 +26,13 @@ JOURNALS = _VENUES.journals
 CONFERENCES = _VENUES.conferences
 NON_RANKED = _VENUES.non_ranked
 
-_VENUE_SPLIT_RE = re.compile(r'[2\-*^(]')
+# The truncation fallback's delimiters: a four-digit year, or a structural
+# character. It used to split on the literal digit `2`, which happens to work for
+# years in this century but mangles a venue whose name contains one --
+# "K2 Workshop" became `k`, "H2O Symposium" became `h`. Matching a four-digit run
+# instead keeps "CogSci2024" -> cogsci and "ACL 2024" -> acl while leaving those
+# alone.
+_VENUE_SPLIT_RE = re.compile(r'\d{4}|[\-*^(]')
 
 _CATEGORY_LABELS = {
     "journals":    "Journals",

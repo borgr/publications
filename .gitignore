@@ -7,6 +7,8 @@ __pycache__/
 tmp.csv
 # Atomic-write temporaries; a crash mid-write can leave one behind.
 *.tmp
+# Run lock; machine-local and reclaimed automatically if stale.
+.pipeline.lock
 
 # `wzmn.bib` used to be listed here. It matched nothing -- the build output is
 # overleaf/Wzmn.bib, inside the submodule, which this file does not govern --

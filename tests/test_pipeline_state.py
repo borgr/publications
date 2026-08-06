@@ -3,9 +3,11 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pipeline_state import PipelineState, hash_file
+from pipeline_state import AlreadyRunning, PipelineState, RunLock, hash_file
 
 
 def write(path, text):
@@ -119,3 +121,69 @@ def test_hash_is_content_addressed(tmp_path):
     assert hash_file(a) == hash_file(b)
     write(tmp_path / "b.txt", "different")
     assert hash_file(a) != hash_file(b)
+
+
+# ── one run at a time ────────────────────────────────────────────────────────
+#
+# The weekly scheduled run and a manual one can overlap. Atomic writes stop a
+# file being truncated but not a lost update: both read the table, both write it,
+# and the first one's new paper quietly disappears.
+
+_os = os
+
+
+def test_a_second_run_is_refused(tmp_path):
+    path = str(tmp_path / "run.lock")
+    with RunLock(path):
+        with pytest.raises(AlreadyRunning) as excinfo:
+            RunLock(path).acquire()
+        assert str(_os.getpid()) in str(excinfo.value)
+
+
+def test_the_lock_is_released_on_exit(tmp_path):
+    path = str(tmp_path / "run.lock")
+    with RunLock(path):
+        assert _os.path.exists(path)
+    assert not _os.path.exists(path)
+
+
+def test_the_lock_is_released_even_when_the_run_raises(tmp_path):
+    path = str(tmp_path / "run.lock")
+    with pytest.raises(ValueError):
+        with RunLock(path):
+            raise ValueError("boom")
+    assert not _os.path.exists(path)
+
+
+def test_a_stale_lock_from_a_dead_process_is_taken_over(tmp_path):
+    """A killed run must not wedge the pipeline forever."""
+    path = tmp_path / "run.lock"
+    # PID 1 exists but a plausibly-dead high PID does not; use an unused one.
+    dead = 2 ** 22
+    path.write_text(f"{dead}\n2026-01-01T00:00:00\n", encoding="utf-8")
+    with RunLock(str(path)) as lock:
+        assert lock.acquired
+        assert path.read_text(encoding="utf-8").startswith(str(_os.getpid()))
+    assert not path.exists()
+
+
+def test_a_corrupt_lock_file_is_taken_over(tmp_path):
+    path = tmp_path / "run.lock"
+    path.write_text("not a pid", encoding="utf-8")
+    with RunLock(str(path)) as lock:
+        assert lock.acquired
+
+
+def test_releasing_twice_is_harmless(tmp_path):
+    lock = RunLock(str(tmp_path / "run.lock")).acquire()
+    lock.release()
+    lock.release()
+
+
+def test_releasing_does_not_delete_someone_elses_lock(tmp_path):
+    """After a takeover, the original owner must not remove the new lock."""
+    path = tmp_path / "run.lock"
+    ours = RunLock(str(path)).acquire()
+    path.write_text("999999\n", encoding="utf-8")   # someone else took over
+    ours.release()
+    assert path.exists(), "must only remove a lock we still own"

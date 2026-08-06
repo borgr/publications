@@ -172,3 +172,36 @@ def test_match_venue_refuses_a_weak_match():
 
 def test_match_venue_handles_an_empty_list():
     assert match_venue("anything", []) is None
+
+
+# ── the truncation fallback's delimiters ─────────────────────────────────────
+
+@pytest.mark.parametrize("raw,expected", [
+    # A year ends the venue name, whether or not a space precedes it.
+    ("ACL 2024", "acl"),
+    ("CogSci2024", "cogsci"),
+    ("Interspeech 2024", "interspeech"),
+    # A digit *inside* a name must not end it. Splitting on the literal `2` --
+    # which is what the old rule did -- turned these into one letter.
+    ("K2 Workshop on Knowledge", "k2 workshop on knowledge"),
+    ("H2O Symposium", "h2o symposium"),
+    ("L2 Learning Workshop", "l2 learning workshop"),
+    ("Web3 Conference", "web3 conference"),
+    # Structural delimiters still end it.
+    ("EMNLP-Findings", "emnlp"),
+    ("ICLR*", "iclr"),
+])
+def test_venue_truncation_delimiters(raw, expected):
+    assert build_bib.simplify_venue(raw) == expected
+
+
+def test_every_live_venue_string_still_resolves_the_same_way():
+    """Guards the truncation rule against a change that silently refiles papers."""
+    from table_io import read_table
+    df = read_table()
+    resolved = [build_bib.simplify_venue(str(v)) for v in df["Venue"].dropna()]
+    venues = Venues.load()
+    known = sum(1 for v in resolved if venues.known(v))
+    # 64 of the live strings resolve to a configured venue; a drop means the
+    # truncation rule or a match phrase regressed.
+    assert known >= 64, f"only {known} venue strings resolve to a known venue"

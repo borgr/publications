@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, urlparse
 from bs4 import BeautifulSoup
 
 import config
-from citations_io import write_citation_rows
+from citations_io import read_citation_rows, write_citation_rows
 
 DEFAULT_USER_ID = config.SCHOLAR_USER_ID
 DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citations.csv")
@@ -30,6 +30,11 @@ DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citat
 # Scholar's default page size; mirrors what a browser's "Show more" click fetches
 _PAGE_SIZE = 20
 _MAX_RETRIES = 4
+
+# Refuse to overwrite citations.csv if the paper count drops by more than this.
+# A partial scrape looks exactly like papers having been removed, and the cost of
+# getting it wrong is asymmetric: papers past a failed page silently read as zero.
+_MAX_SHRINK = 0.10
 
 # curl flags that produce a browser-like request (avoids Python TLS fingerprint blocking)
 _CURL_FLAGS = [
@@ -237,6 +242,15 @@ def scrape_profile(user_id: str, delay: float = 3.0) -> tuple[list[dict], dict |
         html = _fetch_page(user_id, start)
         page = _parse_page(html)
 
+        if not page and start > 0:
+            # An empty page after a full one is ambiguous: either the end of the
+            # profile, or a hiccup. Treating it as the end silently truncated the
+            # profile, and since the result overwrites citations.csv, every paper
+            # past the gap then reported zero citations. Retry before believing it.
+            print("    empty page after a full one — retrying once…", flush=True)
+            time.sleep(max(delay, 5.0))
+            page = _parse_page(_fetch_page(user_id, start))
+
         if not page:
             break
 
@@ -282,6 +296,12 @@ def main() -> None:
         help=f"Scholar user ID or full profile URL (default: {DEFAULT_USER_ID})",
     )
     parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="Write even if the paper count dropped sharply (use when the profile "
+             "genuinely lost papers)",
+    )
+    parser.add_argument(
         "-o",
         "--output",
         default=DEFAULT_OUTPUT,
@@ -300,6 +320,21 @@ def main() -> None:
             "Fetched 0 papers — Scholar HTML may have changed or the profile is empty. "
             f"{args.output} was NOT overwritten."
         )
+
+    # A partial scrape is far more dangerous than a failed one, because the result
+    # overwrites citations.csv and every paper past the gap silently reports zero
+    # citations from then on. Compare against what we already had.
+    previous = read_citation_rows(args.output)
+    if previous and not args.allow_shrink:
+        floor = int(len(previous) * (1 - _MAX_SHRINK))
+        if len(papers) < floor:
+            raise RuntimeError(
+                f"Fetched {len(papers)} papers but {os.path.basename(args.output)} "
+                f"already had {len(previous)} — a drop of more than "
+                f"{_MAX_SHRINK:.0%} usually means a page failed to load, not that "
+                f"papers disappeared. {args.output} was NOT overwritten.\n"
+                f"  Re-run; if the profile genuinely shrank, pass --allow-shrink."
+            )
 
     write_csv(papers, args.output)
     print(f"Saved to {args.output}")

@@ -21,6 +21,7 @@ Recorded per step, so adding an input to a step's dependency list correctly
 invalidates just that step.
 """
 
+import errno
 import hashlib
 import json
 import os
@@ -28,6 +29,90 @@ import time
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.join(FILE_DIR, ".pipeline_state.json")
+LOCK_PATH = os.path.join(FILE_DIR, ".pipeline.lock")
+
+
+class AlreadyRunning(Exception):
+    """Another run holds the lock."""
+
+
+class RunLock:
+    """Stop two runs from interleaving their writes.
+
+    The scheduled weekly run and a manual one can overlap. Individual files are
+    written atomically, so neither can be truncated, but that does not prevent a
+    lost update: both processes read the table, both write it, and the first
+    one's new paper quietly disappears.
+
+    A PID file rather than fcntl, because the useful message is "run 12345 is
+    already going" and because a stale lock from a killed process must not wedge
+    the pipeline forever -- if the recorded PID is gone, the lock is taken over.
+
+    Used as a context manager; releasing is idempotent.
+    """
+
+    def __init__(self, path=LOCK_PATH):
+        self.path = path
+        self.acquired = False
+
+    @staticmethod
+    def _alive(pid):
+        try:
+            os.kill(pid, 0)
+        except OSError as exc:
+            return exc.errno == errno.EPERM   # exists but owned by someone else
+        return True
+
+    def _read_pid(self):
+        try:
+            with open(self.path) as f:
+                return int((f.read().split("\n")[0] or "0").strip())
+        except (OSError, ValueError):
+            return 0
+
+    def acquire(self):
+        for _ in range(2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                pid = self._read_pid()
+                # Any live holder blocks, including this process. Exempting our
+                # own PID would let a run silently steal its own lock, which
+                # defeats the point and hides a re-entrancy bug.
+                if pid and self._alive(pid):
+                    raise AlreadyRunning(
+                        f"another run is in progress (pid {pid}). If it is not, "
+                        f"delete {os.path.basename(self.path)}.")
+                # Stale: the recorded process is gone. Take it over.
+                try:
+                    os.unlink(self.path)
+                except OSError:
+                    pass
+                continue
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{os.getpid()}\n{time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
+            self.acquired = True
+            return self
+        raise AlreadyRunning(f"could not acquire {self.path}")
+
+    def release(self):
+        if not self.acquired:
+            return
+        # Only remove our own lock, so taking over a stale one cannot delete the
+        # lock of whoever took it over from us.
+        if self._read_pid() == os.getpid():
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+        self.acquired = False
+
+    def __enter__(self):
+        return self.acquire()
+
+    def __exit__(self, *_exc):
+        self.release()
+        return False
 
 _CHUNK = 1 << 16
 

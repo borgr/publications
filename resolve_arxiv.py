@@ -771,19 +771,22 @@ def update_bib_inplace(
                           f"({new_rank} < {old_rank})", file=sys.stderr)
                     continue
 
-        pattern = re.compile(
-            r'@\w+\s*\{' + re.escape(key) + r',.*?\r?\n\}',
-            re.DOTALL,
-        )
-        # A callable replacement, so the new entry is inserted literally. Passing
-        # the string directly made re parse it as a template, and a real run died
-        # with `re.error: bad escape \i` on a LaTeX accent -- after every lookup
-        # had been made, so the whole run's work was lost.
-        replacement = new_bib.rstrip('\n')
-        new_text, count = pattern.subn(lambda _m: replacement, bib_text, count=1)
-        if count:
-            bib_text = new_text
-            n_replaced += 1
+        # Locate the entry with the brace-counting parser rather than a regex.
+        # The regex was `@\w+\{key,.*?\r?\n\}`, which stops at the first
+        # line-initial `}` -- and that can be *inside* a field value. An abstract
+        # containing a line that begins with `}` (legal BibTeX, and the parser
+        # reads it correctly) was cut in half, the first part replaced and the
+        # remainder left in orig.bib as orphaned text.
+        current = {e["item_name"]: e for e in parse_bibtex(bib_text)}.get(key)
+        if current is None:
+            continue
+        old_text = current["beg"] + current["rest"]
+        start = bib_text.find(old_text)
+        if start == -1:
+            continue
+        bib_text = (bib_text[:start] + new_bib.rstrip('\n')
+                    + bib_text[start + len(old_text):])
+        n_replaced += 1
     n_appended = 0
     for _key, new_bib in new_entries:
         if re.search(r'@\w+\s*\{' + re.escape(_key) + r'\s*,', bib_text):

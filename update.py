@@ -40,7 +40,7 @@ from bib_utils import extract_field, parse_bibtex
 from build_bib import simplify_venue
 from citations_io import read_citation_rows
 from identity import IdentityStore, join_citations
-from pipeline_state import PipelineState
+from pipeline_state import AlreadyRunning, PipelineState, RunLock
 from venues import Venues
 from table_io import (CSV_PATH, XLSX_PATH, append_rows, fill_blanks, read_table,
                       set_bib_keys, set_column)
@@ -722,7 +722,13 @@ Companion commands, none needed routinely:
 
 if __name__ == "__main__":
     try:
-        main()
+        # One run at a time: the weekly scheduled run and a manual one would
+        # otherwise interleave their reads and writes and lose an update.
+        with RunLock():
+            main()
+    except AlreadyRunning as exc:
+        print(f"Not starting: {exc}")
+        sys.exit(1)
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001 - top-level guard for unattended runs

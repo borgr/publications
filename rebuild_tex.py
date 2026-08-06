@@ -30,12 +30,27 @@ def _nocite_str(keys):
     return r'\nocite{' + ','.join(keys) + '}'
 
 
+class TexUpdateError(Exception):
+    """A substitution in main.tex could not find what it was supposed to edit.
+
+    Raised rather than warned about, because every one of these edits is the
+    point of the step. A missing anchor means a CV section silently keeps the
+    paper list it had last time, or the citation total silently goes stale, while
+    the run reports success and pushes. main.tex is meant to be edited in the
+    Overleaf editor, so reflowing one line used to be enough to freeze the
+    Journals section permanently.
+    """
+
+
 def _replace_first_nocite_in_chapter(tex, chapter_title, new_keys):
-    """Replace the first uncommented \\nocite{} inside a chapter block."""
+    """Replace the first uncommented \\nocite{} inside a chapter block.
+
+    Returns (tex, problem) where problem is None on success.
+    """
     chapter_start = tex.find(r'\chapter*{' + chapter_title + '}')
     if chapter_start == -1:
-        print(f"Warning: chapter {chapter_title!r} not found in tex")
-        return tex
+        return tex, (f"chapter {chapter_title!r} not found — its paper list "
+                     f"cannot be updated. Has the heading been renamed?")
 
     # Chapter ends at the next uncommented \putbib (anchored to start of line)
     putbib_match = re.search(r'^\\putbib', tex[chapter_start:], re.MULTILINE)
@@ -44,29 +59,31 @@ def _replace_first_nocite_in_chapter(tex, chapter_title, new_keys):
 
     m = _NOCITE_RE.search(chunk)
     if not m:
-        print(f"Warning: no \\nocite{{}} found in chapter {chapter_title!r}")
-        return tex
+        return tex, (f"no uncommented \\nocite{{}} inside chapter "
+                     f"{chapter_title!r} — nothing to replace")
 
     new_chunk = chunk[:m.start()] + _nocite_str(new_keys) + chunk[m.end():]
-    return tex[:chapter_start] + new_chunk + tex[chapter_end:]
+    return tex[:chapter_start] + new_chunk + tex[chapter_end:], None
 
 
 def _replace_nocite_after_comment(tex, comment_text, new_keys):
-    """Replace the first uncommented \\nocite{} that follows comment_text."""
+    """Replace the first uncommented \\nocite{} following comment_text.
+
+    Returns (tex, problem) where problem is None on success.
+    """
     comment_pos = tex.find(comment_text)
     if comment_pos == -1:
-        print(f"Warning: comment {comment_text!r} not found in tex")
-        return tex
+        return tex, (f"marker {comment_text!r} not found — the list it labels "
+                     f"cannot be updated")
 
     after = tex[comment_pos + len(comment_text):]
     m = _NOCITE_RE.search(after)
     if not m:
-        print(f"Warning: no \\nocite{{}} found after comment {comment_text!r}")
-        return tex
+        return tex, f"no uncommented \\nocite{{}} after {comment_text!r}"
 
     abs_start = comment_pos + len(comment_text) + m.start()
     abs_end = comment_pos + len(comment_text) + m.end()
-    return tex[:abs_start] + _nocite_str(new_keys) + tex[abs_end:]
+    return tex[:abs_start] + _nocite_str(new_keys) + tex[abs_end:], None
 
 
 _STATS_RE   = re.compile(r'\\textbf\{Citations\t(\d+)\nh-index\t(\d+)\n\}')
@@ -111,57 +128,82 @@ def _find_author_names_in_bst(bst_text: str) -> list:
     return re.findall(r't "([A-Z][a-z]+ [A-Z][a-z]+)" =', bst_text)
 
 
-def _update_author_name_in_tex(tex: str) -> str:
-    """Replace the author name line between \\noindent\\today and \\textbf{Citations."""
+def _update_author_name_in_tex(tex: str):
+    """Set the author name line between \\noindent\\today and \\textbf{Citations."""
     author_name = config.AUTHOR_NAME
     m = _AUTHOR_LINE_RE.search(tex)
     if not m:
-        return tex
+        return tex, ("the author-name line (between \\noindent\\today and the "
+                     "Citations block) was not found")
     if m.group(2) == author_name:
-        return tex
-    return _AUTHOR_LINE_RE.sub(r'\g<1>' + author_name + r'\g<3>', tex)
+        return tex, None
+    # A callable replacement: a name containing a backslash would otherwise be
+    # parsed as a regex template.
+    return _AUTHOR_LINE_RE.sub(
+        lambda mm: mm.group(1) + author_name + mm.group(3), tex), None
 
 
-def _update_profile_stats(tex: str) -> str:
-    """Replace the Citations/h-index numbers using profile_stats.json if present."""
+def _update_profile_stats(tex: str):
+    """Set the Citations/h-index numbers from profile_stats.json."""
     if not os.path.exists(STATS_PATH):
-        return tex
+        # Genuinely optional: no stats fetched yet, nothing to write.
+        return tex, None
     try:
         with open(STATS_PATH) as f:
             stats = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
-        print(f"Warning: could not read {STATS_PATH}: {e}")
-        return tex
+        return tex, f"could not read {os.path.basename(STATS_PATH)}: {e}"
 
     citations = stats.get("citations")
     h_index   = stats.get("h_index")
     if citations is None or h_index is None:
-        print(f"Warning: profile_stats.json missing 'citations' or 'h_index'")
-        return tex
+        return tex, "profile_stats.json has no 'citations'/'h_index'"
 
     if not _STATS_RE.search(tex):
-        print("Warning: could not find Citations/h-index block in tex to update")
-        return tex
+        return tex, ("the Citations/h-index block was not found, so the totals "
+                     "in the CV would silently stay stale. The expected shape is "
+                     "\\textbf{Citations<TAB>N<newline>h-index<TAB>N<newline>}")
     new_tex = _STATS_RE.sub(
-        f'\\\\textbf{{Citations\t{citations}\nh-index\t{h_index}\n}}', tex
-    )
+        lambda _m: f'\\textbf{{Citations\t{citations}\nh-index\t{h_index}\n}}', tex)
     if new_tex == tex:
         print(f"  Citations/h-index already current ({citations}, {h_index})")
-    return new_tex
+    return new_tex, None
+
+
+# Each CV section and how its \nocite{} list is located. Data rather than a
+# sequence of calls, so the set is visible in one place and every one is checked.
+_SECTIONS = (
+    # (BibCategories field, kind, anchor)
+    ("journals",    "chapter", "Refereed Articles"),
+    ("conferences", "comment", "% Conferences:"),
+    ("reviews",     "chapter", "Review Papers"),
+    ("workshops",   "chapter", "Workshop Papers"),
+    ("drafts",      "chapter", "Non-reviewed or under review papers"),
+)
 
 
 def update_tex(tex, cats: BibCategories):
-    tex = _update_author_name_in_tex(tex)
-    # Refereed Articles: first uncommented nocite = journals
-    tex = _replace_first_nocite_in_chapter(tex, "Refereed Articles", cats.journals)
-    # Refereed Articles: nocite after "% Conferences:" comment = conferences
-    tex = _replace_nocite_after_comment(tex, "% Conferences:", cats.conferences)
-    # Remaining chapters each have a single nocite
-    tex = _replace_first_nocite_in_chapter(tex, "Review Papers", cats.reviews)
-    tex = _replace_first_nocite_in_chapter(tex, "Workshop Papers", cats.workshops)
-    tex = _replace_first_nocite_in_chapter(tex, "Non-reviewed or under review papers", cats.drafts)
-    tex = _update_profile_stats(tex)
-    return tex
+    """Apply every edit. Returns (tex, problems); problems is empty on success."""
+    problems = []
+
+    tex, problem = _update_author_name_in_tex(tex)
+    if problem:
+        problems.append(problem)
+
+    for field, kind, anchor in _SECTIONS:
+        keys = getattr(cats, field)
+        if kind == "chapter":
+            tex, problem = _replace_first_nocite_in_chapter(tex, anchor, keys)
+        else:
+            tex, problem = _replace_nocite_after_comment(tex, anchor, keys)
+        if problem:
+            problems.append(f"{field}: {problem}")
+
+    tex, problem = _update_profile_stats(tex)
+    if problem:
+        problems.append(problem)
+
+    return tex, problems
 
 
 def check_overleaf_present() -> str:
@@ -198,7 +240,18 @@ def main(cats: BibCategories = None):
     with open(TEX_PATH) as f:
         tex = f.read()
 
-    tex = update_tex(tex, cats)
+    tex, problems = update_tex(tex, cats)
+    if problems:
+        # Refuse to write a half-updated CV. Every one of these edits is the
+        # point of this step; a partial success leaves a section frozen with a
+        # stale paper list, which is worse than not running.
+        raise TexUpdateError(
+            f"{len(problems)} edit(s) to {os.path.basename(TEX_PATH)} could not be "
+            f"applied, so it was left untouched:\n  - "
+            + "\n  - ".join(problems)
+            + "\n  main.tex is meant to be edited in Overleaf, so an anchor may "
+              "have been reflowed or renamed. Restore the anchor, or update "
+              "_SECTIONS / the regexes in rebuild_tex.py to match.")
 
     with open(TEX_PATH, "w") as f:
         f.write(tex)
