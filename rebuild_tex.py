@@ -278,9 +278,15 @@ def check_overleaf_present() -> str:
                 f"out.\n  Fix with:  git submodule update --init\n"
                 f"  For a fork, point it at your own project:  "
                 f"python init_new_author.py --overleaf-url <your-overleaf-git-url>")
+    # Name the template that is actually present. The submodule copy only exists
+    # while overleaf/ points at the original author's project, so naming it
+    # unconditionally gave a fork a command that could not work.
+    template = os.path.join(OVERLEAF_DIR, "template.tex")
+    if not os.path.exists(template):
+        template = os.path.join(FILE_DIR, "templates", "main.tex")
     return (f"{TEX_PATH} is missing, but overleaf/ has other files.\n"
             f"  If this is a new Overleaf project, seed it:  "
-            f"cp {os.path.join(OVERLEAF_DIR, 'template.tex')} {TEX_PATH}")
+            f"cp {template} {TEX_PATH}")
 
 
 def main(cats: BibCategories = None):

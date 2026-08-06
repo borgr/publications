@@ -1,0 +1,148 @@
+% ============================================================
+% PUBLICATIONS CV TEMPLATE
+%
+% GitHub repo: https://github.com/borgr/publications
+%
+% HOW IT WORKS
+% ------------
+% This file is a template for a publications CV compiled on Overleaf.
+% The pipeline (update.py in the GitHub repo) keeps it up to date
+% automatically:
+%   1. Scrapes Google Scholar → citations.csv + profile_stats.json
+%   2. Syncs new papers into Contributions_table.xlsx
+%   3. Resolves arXiv entries to published BibTeX in orig.bib
+%   4. Builds Wzmn.bib from orig.bib + xlsx metadata
+%   5. Rewrites \nocite{} blocks and the Citations/h-index line in main.tex
+%   6. Commits and pushes to this Overleaf project and to GitHub
+%
+% Run: python update.py   (from the publications/ directory)
+%
+% WHAT TO UPDATE MANUALLY
+% -----------------------
+% 1. Author name and Scholar ID: edit config.py (single source of truth).
+%    The pipeline rewrites the BST files and this document's header
+%    automatically on each run.
+%
+% 3. Contributions_table.xlsx: the source of truth for paper metadata
+%    (venue, authors, year, bib key, category flags).  Add new papers
+%    there; the pipeline will pick them up on the next run.
+%
+% 4. The \section*{Contributions note} text below explains the ST/PI
+%    superscript convention — edit it to match your own conventions.
+%
+% 5. Chapter structure: each \chapter*{} block ends with \putbib.
+%    The \nocite{} lines are auto-regenerated; do not edit them by hand.
+%
+% FLAGS / OPTIONS
+% ---------------
+% Show citation counts next to each entry:
+%   The BST emits \bibcitecount{N} when a citations={N} field is present.
+%   Swap which \bibcitecount line is commented to toggle on/off (default: off).
+%
+% Bibliography style:
+%   planyr-rev  — reverse chronological (default)
+%   planyr      — chronological
+%   iclr-based  — ICLR style
+%   acl-based   — ACL style
+% ============================================================
+
+\documentclass[11pt,oneside]{book}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+\title{Per-chapter bibliographies with bibunits}
+\usepackage{ulem}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{hyperref}
+\usepackage[sectionbib,numbers]{natbib}
+
+\usepackage{bibunits}
+%\defaultbibliographystyle{unsrtnat}
+% \defaultbibliographystyle{iclr-based}
+% \defaultbibliographystyle{planyr}
+\defaultbibliographystyle{planyr-rev}
+
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd{\chapter}{\if@openright\cleardoublepage\else\clearpage\fi}{}{}{}
+
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{wrapfig}
+\usepackage{adjustbox}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{etoolbox}
+\usepackage{soul}
+\defaultbibliography{Wzmn}
+\renewcommand{\bibsection}{}
+
+%\newcommand{\bibcitecount}[1]{ \textit{\small[#1 cited]}}  % show citation counts
+\newcommand{\bibcitecount}[1]{}                              % hide citation counts (default)
+
+%%% Uncomment to change the bibliography heading/title
+% \renewcommand{\bibname}{References}
+
+%%% Uncomment to include bibliographies in the table of contents
+% \usepackage[nottoc]{tocbibind}
+
+\hypersetup{
+    colorlinks,
+    linkcolor={red!50!black},
+    citecolor={blue!80!black},
+    urlcolor={blue!80!black}
+}
+
+\begin{document}
+
+%% Must be called after \begin{document}
+\bibliographyunit[\chapter]
+
+\frontmatter
+\mainmatter
+
+\noindent\today
+
+Your Name
+\textbf{Citations	0
+h-index	0
+}
+% ^^^ This block is auto-updated from profile_stats.json by update.py
+
+\section*{Contributions note}
+Edit this section to describe your author-role conventions.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+\chapter*{Refereed Articles}
+\nocite{}
+% Conferences:
+\nocite{}
+
+\putbib
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\chapter*{Review Papers}
+\nocite{}
+
+\putbib
+
+
+\chapter*{Workshop Papers}
+\nocite{}
+
+\putbib
+
+
+\chapter*{Non-reviewed or under review papers}
+
+\nocite{}
+
+{\renewcommand{\bibsection}{}
+\putbib
+}
+
+\end{document}

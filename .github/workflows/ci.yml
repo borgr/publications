@@ -96,6 +96,102 @@ jobs:
             git --no-pager diff -- WORKLIST.md | head -60
           fi
 
+  fork:
+    # Can somebody else actually use this?
+    #
+    # The author's own machine cannot answer that: it has the Overleaf
+    # credentials in its keychain, so git quietly authenticates and the
+    # fork-only failures never appear. Two shipped bugs came from exactly that
+    # blind spot -- the documented clone aborted on the private submodule, and
+    # init_new_author.py reset main.tex from a template that only exists inside
+    # the original author's Overleaf project.
+    #
+    # So: clone as a stranger, with credentials actively disabled, and drive the
+    # documented fork path end to end. No secrets, and none usable if there were.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Clone exactly as the README says
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          # credential.helper= disables any ambient helper, so an authenticated
+          # runner cannot mask a failure a real forker would hit.
+          git -c credential.helper= clone --quiet \
+            "https://github.com/${GITHUB_REPOSITORY}.git" fork
+          cd fork
+          test ! -s overleaf/main.tex \
+            && echo "overleaf/ is unpopulated, as expected for a fork"
+
+      - name: Install
+        run: pip install -r fork/requirements-dev.txt
+
+      - name: A stand-in for the forker's own Overleaf project
+        run: |
+          # A bare local repo: the fork path must not need the real Overleaf.
+          git init -q --bare "$RUNNER_TEMP/their-overleaf.git"
+          git init -q "$RUNNER_TEMP/seed" && cd "$RUNNER_TEMP/seed"
+          git config user.email f@example.com && git config user.name f
+          git commit -q --allow-empty -m "empty project"
+          git push -q "$RUNNER_TEMP/their-overleaf.git" HEAD:refs/heads/master
+
+      - name: Run the documented fork path
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: protocol.file.allow
+          GIT_CONFIG_VALUE_0: always
+        run: |
+          cd fork
+          git config user.email f@example.com
+          git config user.name f
+          python init_new_author.py --yes \
+            --overleaf-url "$RUNNER_TEMP/their-overleaf.git"
+
+      - name: The fork points at its own project, not the original
+        run: |
+          cd fork
+          if grep -q "git.overleaf.com" .gitmodules; then
+            echo "::error title=Fork still points at the original project::init_new_author.py left .gitmodules pointing at git.overleaf.com."
+            cat .gitmodules
+            exit 1
+          fi
+          test -s overleaf/main.tex || {
+            echo "::error title=No main.tex::The fork path left no CV to build."; exit 1; }
+
+      - name: No personal data survived
+        run: |
+          cd fork
+          # A name and a Scholar ID in config.py are the author's, and the
+          # README tells the forker to edit them; the data files must be empty.
+          for f in citations.csv papers.csv orig.bib; do
+            # awk, not `grep -c . || echo 0`: on an empty file grep prints 0 and
+            # also exits 1, so the fallback appends a second 0 and the numeric
+            # comparison below dies on "0\n0".
+            rows=$(awk 'NF' "$f" 2>/dev/null | wc -l | tr -d ' ')
+            if [ "$rows" -gt 1 ]; then
+              echo "::error title=Personal data survived::$f still has $rows lines."
+              exit 1
+            fi
+          done
+          python - <<'PY'
+          import json
+          s = json.load(open("profile_stats.json"))
+          assert s == {"citations": 0, "h_index": 0}, s
+          print("profile_stats.json zeroed")
+          PY
+
+      - name: The pipeline still builds from empty
+        run: |
+          cd fork
+          # The real test of a usable fork: an empty table must produce a CV
+          # rather than a traceback.
+          python rebuild_tex.py
+          test -f overleaf/Wzmn.bib && echo "built an empty bibliography"
+          python scripts/worklist.py --quiet && echo "worklist generated"
+
   overleaf:
     # Does the Overleaf project actually match the committed data?
     #
