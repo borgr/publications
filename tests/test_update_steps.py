@@ -396,6 +396,182 @@ def test_step3_dry_run_performs_no_lookups(tmp_path, monkeypatch, capsys):
     assert "An Unresolved Row" in out
 
 
+# ── step 3: the live branch, which writes orig.bib ───────────────────────────
+
+_ARXIV_ENTRY = ("@misc{{{key},\n  title = {{{title}}},\n  eprint = {{{eprint}}},\n"
+                "  archivePrefix = {{arXiv}}\n}}\n")
+
+
+def published(key, title, venue="ACL"):
+    return (f"@inproceedings{{{key},\n  title = {{{title}}},\n"
+            f"  booktitle = {{{venue}}},\n  year = {{2024}}\n}}\n")
+
+
+@pytest.fixture
+def step3(tmp_path, monkeypatch):
+    """orig.bib on disk, everything else in memory, and no network or sleeping.
+
+    Returns a helper that sets up the two inputs -- the arXiv entries already in
+    orig.bib and the table rows with no entry -- and hands back what the run did.
+    """
+    bib = tmp_path / "orig.bib"
+    monkeypatch.setattr(update, "BIB_PATH", str(bib))
+    monkeypatch.setattr(update.time, "sleep", lambda _s: None)
+    saved = {"attempts": [], "store": 0, "keys": {}}
+    monkeypatch.setattr(update, "save_attempts",
+                        lambda a: saved["attempts"].append(dict(a)))
+    monkeypatch.setattr(update, "set_bib_keys",
+                        lambda assignments: saved["keys"].update(assignments)
+                        or len(assignments))
+
+    class _Store(IdentityStore):
+        def save(self, path=None):
+            saved["store"] += 1
+
+    def _run(bib_text="", missing=(), resolver=None, attempts=None):
+        bib.write_text(bib_text)
+        monkeypatch.setattr(update, "load_attempts", lambda: dict(attempts or {}))
+        monkeypatch.setattr(update.IdentityStore, "load",
+                            classmethod(lambda cls, path=None: _Store()))
+        monkeypatch.setattr(update, "get_missing_bib_entries",
+                            lambda text: [dict(e) for e in missing])
+        monkeypatch.setattr(update, "resolve",
+                            resolver or (lambda *a, **k: ("", "not found")))
+        result = update.step3_resolve(False)
+        return result, bib.read_text(), saved
+    return _run
+
+
+def test_a_published_version_replaces_the_arxiv_entry(step3):
+    """The whole point of the step: a preprint that has since appeared somewhere
+    stops being cited as a preprint on the CV."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    resolver = lambda *a, **k: (published("k1", "A Paper"), "DBLP")  # noqa: E731
+    (upgraded, appended, still_arxiv, not_found), bib, _s = step3(text, resolver=resolver)
+    assert (upgraded, appended, still_arxiv) == (1, 0, 0)
+    assert not_found == []
+    assert "@inproceedings{k1" in bib and "@misc{k1" not in bib
+
+
+def test_an_entry_with_no_published_version_yet_is_left_as_a_preprint(step3):
+    """Most preprints are still preprints, so this is the common path: counted as
+    unresolved, but not reported as a problem and not rewritten."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    resolver = lambda *a, **k: (text, "arXiv (export API)")  # noqa: E731
+    (upgraded, _a, still_arxiv, _nf), bib, _s = step3(text, resolver=resolver)
+    assert (upgraded, still_arxiv) == (0, 1)
+    assert "@misc{k1" in bib
+
+
+def test_an_entry_no_source_knows_is_reported_by_title(step3):
+    """This list is what reaches WORKLIST.md, so it has to carry the title -- a
+    bare key is not enough to paste an entry in by hand."""
+    text = _ARXIV_ENTRY.format(key="k1", title="An Obscure Paper", eprint="2401.1")
+    (_u, _a, _sa, not_found), _bib, _s = step3(text)
+    assert not_found == [("An Obscure Paper", "k1")]
+
+
+def test_a_row_with_no_entry_gets_one_appended(step3):
+    resolver = lambda *a, **k: (published("new1", "A New Paper"), "DBLP")  # noqa: E731
+    (_u, appended, _sa, not_found), bib, _s = step3(
+        "", missing=[{"item_name": "new1", "title": "A New Paper"}], resolver=resolver)
+    assert appended == 1 and not_found == []
+    assert "@inproceedings{new1" in bib
+
+
+def test_a_resolved_key_is_written_back_onto_its_row(step3):
+    """Without this the row stays keyless, so the next run looks the same paper up
+    again -- forever, and the CV never cites it."""
+    resolver = lambda *a, **k: (published("new1", "A New Paper"), "DBLP")  # noqa: E731
+    _r, _bib, saved = step3(
+        "", missing=[{"item_name": "new1", "title": "A New Paper"}], resolver=resolver)
+    assert saved["keys"] == {"A New Paper": "new1"}
+
+
+def test_no_key_is_written_for_a_row_nothing_resolved(step3):
+    """A key on the row with no entry under it in orig.bib builds a CV with an
+    unresolved \\cite, which is worse than a paper that is merely missing."""
+    _r, _bib, saved = step3("", missing=[{"item_name": "new1", "title": "A New Paper"}])
+    assert saved["keys"] == {}
+
+
+def test_an_unresolved_row_is_reported_by_title(step3):
+    (_u, _a, _sa, not_found), _bib, _s = step3(
+        "", missing=[{"item_name": "new1", "title": "A New Paper"}])
+    assert not_found == [("A New Paper", "new1")]
+
+
+def test_an_unchanged_bib_is_not_rewritten(step3, capsys):
+    """orig.bib is tracked in git, so an unconditional write dirties the tree on
+    every run and makes CI's staleness check fire for no reason."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    resolver = lambda *a, **k: (text, "arXiv (export API)")  # noqa: E731
+    _r, bib, _s = step3(text, resolver=resolver)
+    assert bib == text
+    assert "left untouched" in capsys.readouterr().out
+
+
+def test_every_attempt_is_counted_even_when_it_fails(step3):
+    """The count is what sorts hopeless lookups last and what WORKLIST.md reports,
+    so it has to rise on failure -- that is the case it exists for."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    _r, _bib, saved = step3(text, missing=[{"item_name": "new1", "title": "New"}],
+                            attempts={"k1": 3})
+    assert saved["attempts"][-1] == {"k1": 4, "new1": 1}
+
+
+def test_progress_is_checkpointed_before_the_run_ends(step3):
+    """Resolving ~90 entries is minutes of deliberate rate-limit sleeps. Saving
+    only at the end meant a Ctrl-C threw away every lookup the run had made."""
+    entries = "".join(_ARXIV_ENTRY.format(key=f"k{i}", title=f"Paper {i}",
+                                          eprint=f"2401.{i:05d}")
+                      for i in range(12))
+    _r, _bib, saved = step3(entries)
+    assert len(saved["attempts"]) >= 2, "no mid-loop checkpoint was written"
+    assert saved["attempts"][0] == {f"k{i}": 1 for i in range(10)}, (
+        "the checkpoint must hold the first ten lookups, not an empty dict")
+    assert saved["store"] >= 2
+
+
+def test_the_second_loop_checkpoints_too(step3):
+    """Part B is the slower half -- a row with no key has no arXiv ID to look up,
+    so every source gets tried -- which makes it the likelier half to be
+    interrupted."""
+    missing = [{"item_name": f"new{i}", "title": f"Paper {i}"} for i in range(12)]
+    _r, _bib, saved = step3("", missing=missing)
+    assert any(len(a) == 10 for a in saved["attempts"]), (
+        "no checkpoint after the tenth row with no entry")
+
+
+def test_the_identifiers_learned_while_resolving_are_saved(step3):
+    """Recording them is what makes the next run's citation join an exact lookup
+    instead of a title-similarity guess."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    _r, _bib, saved = step3(text)
+    assert saved["store"] >= 1
+
+
+def test_the_resolver_gets_the_arxiv_id_and_the_existing_entry(step3):
+    """It needs the entry text because a DOI already recorded in it resolves the
+    paper without a search, and the ID because that is the cheapest lookup."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    seen = []
+
+    def resolver(title, arxiv_id, key, content="", store=None):
+        seen.append((title, arxiv_id, key, "archivePrefix" in content))
+        return ("", "not found")
+    step3(text, resolver=resolver)
+    assert seen == [("A Paper", "2401.00001", "k1", True)]
+
+
+def test_a_deprioritised_entry_is_announced(step3, capsys):
+    """Sorting the hopeless ones last is invisible unless it is said, and it is the
+    reason a run's output order changes between weeks."""
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    step3(text, attempts={"k1": update._DEPRIORITIZE_AFTER})
+    assert "prior attempts sorted last" in capsys.readouterr().out
+
+
 # ── step 6 ───────────────────────────────────────────────────────────────────
 
 def test_step6_counts_the_open_items(tmp_path, monkeypatch, capsys):

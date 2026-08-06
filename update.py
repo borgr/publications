@@ -415,10 +415,6 @@ def step3_resolve(dry_run: bool) -> tuple:
     print(f"  {len(new_entries)} new entries to append to orig.bib")
 
     n_still_arxiv = len(arxiv_entries) - upgraded
-    if dry_run:
-        print("  (dry-run: orig.bib not modified)")
-        return upgraded, len(new_entries), n_still_arxiv, not_found
-
     new_bib_text, n_replaced, n_appended = update_bib_inplace(bib_text, updates, new_entries)
 
     if new_entries:
