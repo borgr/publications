@@ -9,6 +9,11 @@ tmp.csv
 *.tmp
 # Run lock; machine-local and reclaimed automatically if stale.
 .pipeline.lock
+# Coverage data: a binary file rewritten by every test run, so tracking it makes
+# `git status` dirty after running the suite and conflicts on every merge.
+.coverage
+.coverage.*
+htmlcov/
 
 # `wzmn.bib` used to be listed here. It matched nothing -- the build output is
 # overleaf/Wzmn.bib, inside the submodule, which this file does not govern --
