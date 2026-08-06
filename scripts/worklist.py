@@ -59,6 +59,64 @@ class Section:
         self.nature = nature
 
 
+OVERLEAF_DIR = os.path.join(ROOT, "overleaf")
+# The files whose staleness is visible in the compiled CV.
+_PUBLISHED_FILES = ("main.tex", "Wzmn.bib")
+
+
+def _git(repo, *args):
+    """Run git, returning stdout or None if it could not run."""
+    import subprocess
+    try:
+        result = subprocess.run(["git", "-C", repo, *args],
+                                capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _unpublished_output():
+    """Report generated output that exists locally but has not reached Overleaf.
+
+    The failure this catches is silent by construction and cost a real
+    compile-and-wonder-why: the pipeline had been run many times with --no-push,
+    so main.tex and Wzmn.bib were correct on disk while Overleaf still served the
+    previous version. Nothing anywhere said so -- the run reported success,
+    because generating the files *was* the success.
+
+    Compares the working tree against the Overleaf remote rather than trusting
+    that a push happened.
+    """
+    out = []
+    if not os.path.isdir(OVERLEAF_DIR):
+        return out
+
+    dirty = _git(OVERLEAF_DIR, "status", "--porcelain", "--", *_PUBLISHED_FILES)
+    # Porcelain lines are `XY <path>`, where X or Y may be a space. Splitting the
+    # *unstripped* line matters: stripping first eats the leading status column
+    # and shifts the path by one, which produced "overleaf/ain.tex".
+    changed = [line[3:].split(" -> ")[-1].strip()
+               for line in (dirty or "").splitlines() if line.strip()]
+    if changed:
+        out.append((
+            f"CV output built but not committed ({len(changed)})",
+            "These are generated and correct on disk, but Overleaf still serves "
+            "the previous version — compiling there will show stale numbers. "
+            "`python update.py` (without --no-push) commits and pushes them.",
+            [f"- `overleaf/{path}` has uncommitted changes" for path in changed]))
+
+    # Commits made locally that the Overleaf remote has not got.
+    ahead = _git(OVERLEAF_DIR, "log", "--oneline", "@{upstream}..HEAD")
+    if ahead and ahead.strip():
+        out.append((
+            f"CV output committed but not pushed ({len(ahead.strip().splitlines())})",
+            "Committed in the overleaf/ submodule but not on the Overleaf remote, "
+            "so the project there is behind. `git -C overleaf push origin` sends "
+            "them, or re-run `python update.py`.",
+            [f"- {line}" for line in ahead.strip().splitlines()]))
+    return out
+
+
 def gather():
     """Collect open items. Returns (sections, total_count)."""
     with open(BIB_PATH) as f:
@@ -293,6 +351,10 @@ def gather():
             "published version.",
             [f"- {field} `{value}` on: {', '.join(keys)}"
              for field, value, keys in shared], nature=ONE_OFF))
+
+    # ── built but not published ──────────────────────────────────────────────
+    for title, blurb, lines in _unpublished_output():
+        sections.append(Section(title, blurb, lines, nature=RECURRING))
 
     # ── identifier conflicts ─────────────────────────────────────────────────
     conflicts = store.conflicts()

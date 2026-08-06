@@ -691,6 +691,8 @@ Companion commands, none needed routinely:
     push_ok = True
     if args.no_push:
         print("\n[Step 7] Skipped (--no-push).")
+        print("  Overleaf still serves its previous version. Compiling there now "
+              "would show stale numbers; re-run without --no-push to publish.")
     else:
         push_ok = step7_push(args.dry_run)
 
