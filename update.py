@@ -612,6 +612,9 @@ Companion commands, none needed routinely:
         print("Cannot start:")
         for problem in problems:
             print(f"  - {problem}")
+        # stdout is buffered and stderr is not, so flush before notifying or the
+        # notification prints above the explanation of it.
+        sys.stdout.flush()
         notify.failure("Publications pipeline cannot start.",
                        "; ".join(p.split(chr(10))[0] for p in problems),
                        enabled=not args.no_notify)
