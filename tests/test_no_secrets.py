@@ -7,6 +7,9 @@ meant to be forked, so a paste like that is a published credential.
 
 The URL itself is fine and lives in .gitmodules: it is an address, and cloning it
 without the token fails. What must never appear is the password half.
+
+The scan covers this file too, so its own fixtures are built by concatenation
+rather than written out.
 """
 
 import os
@@ -54,10 +57,15 @@ def test_no_credential_bearing_urls_are_committed():
         "still has it:\n  " + "\n  ".join(leaks))
 
 
+def _url(secret):
+    # Concatenated, never a literal: this file is scanned too, and a fixture
+    # spelled out in full would make the scanner report itself.
+    return "https://git:" + secret + "@git.overleaf.com/abc"
+
+
 def test_the_scan_would_actually_catch_one():
     """The guard above is only reassuring if it can fail. Prove that it can."""
-    m = _URL_CREDENTIAL_RE.search(
-        "url = https://git:olp_9fJk2LmQ8xZ@git.overleaf.com/abc")
+    m = _URL_CREDENTIAL_RE.search("url = " + _url("olp_9fJk2LmQ8xZ"))
     assert m is not None
     assert not _PLACEHOLDER_RE.match(m.group(2))
 
@@ -66,5 +74,5 @@ def test_the_scan_would_actually_catch_one():
     "YOUR_TOKEN", "PASTE_TOKEN_HERE", "TOKEN", "<your-token>", "xxxx",
 ])
 def test_documentation_placeholders_are_not_leaks(placeholder):
-    m = _URL_CREDENTIAL_RE.search(f"https://git:{placeholder}@git.overleaf.com/abc")
+    m = _URL_CREDENTIAL_RE.search(_url(placeholder))
     assert m is not None and _PLACEHOLDER_RE.match(m.group(2))
