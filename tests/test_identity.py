@@ -14,10 +14,10 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from identity import (MATCH_EXACT_ID, MATCH_FUZZY, MATCH_NORMALIZED,
-                      MATCH_TOO_CLOSE, IdentityStore, find_duplicate_titles,
-                      harvest_ids_from_bibtex, harvest_ids_from_s2,
-                      join_citations, normalize_title, title_stem,
-                      titles_match)
+                      MATCH_TOO_CLOSE, IdentityStore, classify_title,
+                      find_duplicate_titles, harvest_ids_from_bibtex,
+                      harvest_ids_from_s2, join_citations, normalize_title,
+                      title_stem, titles_match)
 
 BABYLM_1_TABLE = "Findings of the {B}aby{LM} Challenge: Sample-Efficient Pretraining on Developmentally Plausible Corpora"
 BABYLM_1_SCHOLAR = "Findings of the BabyLM challenge: Sample-efficient pretraining on developmentally plausible corpora"
@@ -117,8 +117,8 @@ def test_indistinguishable_candidates_are_reported_not_guessed():
                             ["Findings of the AbyLM Challenge",
                              "Findings of the CbyLM Challenge"])
     assert result.matched == {}
-    assert result.ambiguous
-    assert result.ambiguous[0][1][0][1] == MATCH_TOO_CLOSE
+    assert result.too_close
+    assert result.too_close[0][0] == "Findings of the BabyLM Challenge"
 
 
 # ── stable identifiers ───────────────────────────────────────────────────────
@@ -134,11 +134,55 @@ def test_scholar_id_beats_a_title_that_no_longer_matches():
     assert result.needs_review == []
 
 
+def test_two_records_for_one_paper_are_summed():
+    """Scholar keeps the preprint and published version as separate records.
+
+    The real case: 14 citations on one, none on the other. Nothing to adjudicate.
+    """
+    table = "The Mighty ToRR: A Benchmark for Table Reasoning and Robustness"
+    result = join_citations(
+        rows(("The mighty torr: A benchmark for table reasoning and robustness", 14),
+             ("The Mighty ToRR: A Benchmark for Table Reasoning and Robustness in LLMs",
+              None)),
+        [table])
+    assert result.matched[table] == 14
+    assert result.aggregated and not result.ambiguous
+
+
+def test_two_counted_records_for_one_paper_are_added():
+    table = "A Paper With Two Scholar Records And A Long Title"
+    result = join_citations(
+        rows(("A Paper With Two Scholar Records And A Long Title", 10),
+             ("A paper with two scholar records and a long title!", 5)),
+        [table])
+    assert result.matched[table] == 15
+
+
+def test_all_records_uncounted_stays_none_not_zero():
+    table = "A Brand New Paper Nobody Has Cited Yet At All"
+    result = join_citations(
+        rows((table, None), (table + " v2", None)), [table])
+    assert result.matched[table] is None
+
+
+def test_different_papers_on_one_row_are_not_summed():
+    """Summing here would invent a citation count that no source reported."""
+    table = "Findings of the BabyLM Challenge: Sample-Efficient Pretraining"
+    store = IdentityStore()
+    store.record("babylm1", title=table, scholar_id="USER:AAAA")
+    result = join_citations(
+        rows((table, 1), ("Something Else Entirely Here And Unrelated", 379, "USER:AAAA")),
+        [table], store=store)
+    assert result.matched[table] == 379, "the exact-ID record wins outright"
+    assert result.ambiguous and not result.aggregated
+
+
 def test_exact_id_wins_over_a_competing_title_match():
     store = IdentityStore()
     store.record("babylm1", title=BABYLM_1_TABLE, scholar_id="USER:AAAA")
     result = join_citations(
-        rows((BABYLM_1_TABLE, 1), ("Something Else Entirely Here", 379, "USER:AAAA")),
+        rows((BABYLM_1_TABLE, 1),
+             ("Something Else Entirely Here And Unrelated", 379, "USER:AAAA")),
         [BABYLM_1_TABLE], store=store,
     )
     assert result.matched[BABYLM_1_TABLE] == 379
@@ -258,3 +302,56 @@ def test_title_stem_keeps_the_longer_side_of_a_colon(title, expected):
 def test_normalize_title_is_stable_under_punctuation_and_spacing():
     assert normalize_title("A  Title -- With: Punctuation!") == normalize_title(
         "a title with punctuation")
+
+
+# ── the invariant that step 2 and the join must never disagree ────────────────
+
+REAL_FUZZY_PAIRS = [
+    # (Scholar title, table title) -- every non-exact match in the live data.
+    ("Will it blend? blending weak and strong labeled data in a neural network for argumentation mining",
+     "Will it Blend? Weak and Manual Labeled Data in a Neural Network for Argumentation Mining"),
+    ("Cluster & tune: Boost cold start performance in text classification",
+     "Cluster & Tune: Boost BERT Cold Start Performance in Topical Text Classification"),
+    ("Dora the explorer: Directed outreaching reinforcement action-selection",
+     "DORA The Explorer: Directed Outreaching Reinforcement Action"),
+    ("Holmes⌕ A Benchmark to Assess the Linguistic Competence of Language Models",
+     "Holmes: Benchmark the Linguistic Competence of Language Models"),
+    ("The Mighty ToRR: A Benchmark for Table Reasoning and Robustness in LLMs",
+     "The mighty torr: A benchmark for table reasoning and robustness"),
+    (BABYLM_1_SCHOLAR, BABYLM_1_TABLE),
+    ("Textarena", "TextArena"),
+]
+
+
+@pytest.mark.parametrize("scholar,table", REAL_FUZZY_PAIRS)
+def test_step2_and_the_join_agree(scholar, table):
+    """If the join treats these as one paper, step 2 must not call it new.
+
+    Disagreement is not a cosmetic inconsistency: step 2 appends a row for
+    anything it thinks is new, so a stricter bar there duplicated every
+    fuzzy-matched paper on every run -- and each duplicate then made the citation
+    join ambiguous. This is the invariant, checked on real title pairs.
+    """
+    joined = join_citations(rows((scholar, 7)), [table])
+    known, _tier, _score = classify_title(scholar, [table])
+
+    if joined.matched:
+        assert known is not None, (
+            "the join matched this paper but step 2 would add a duplicate row")
+        assert known == table
+    else:
+        assert known is None, "step 2 matched a paper the join did not"
+
+
+def test_titles_match_is_consistent_with_classify_title():
+    for scholar, table in REAL_FUZZY_PAIRS:
+        assert titles_match(scholar, table) == (
+            classify_title(scholar, [table])[0] is not None)
+
+
+def test_a_genuinely_different_paper_is_still_new():
+    """The permissive bar must not swallow an actually-new paper wholesale."""
+    known, _tier, _score = classify_title(
+        "A Completely Unrelated Paper About Marine Biology And Fish",
+        [BABYLM_1_TABLE, "TextArena"])
+    assert known is None

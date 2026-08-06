@@ -113,14 +113,25 @@ def parse_bibtex(bib_string):
     `title` is "" when the entry has no readable title.
     """
     results = []
-    for m in _ENTRY_START_RE.finditer(bib_string):
+    pos = 0
+    while True:
+        m = _ENTRY_START_RE.search(bib_string, pos)
+        if not m:
+            break
         entry_type = m.group(1)
-        if entry_type.lower() in _NON_ENTRY_TYPES:
-            continue
         open_idx = bib_string.index('{', m.start())
         close_idx = _find_matching_brace(bib_string, open_idx)
         if close_idx == -1:
-            continue  # unterminated entry; leave it alone rather than guess
+            # Unterminated entry. Resume scanning just past this start rather
+            # than giving up, so one malformed entry costs only itself.
+            pos = m.end()
+            continue
+        # Resume *after* this entry, so an "@misc{...}" appearing inside an
+        # abstract or a note cannot be mistaken for a bibliography record of
+        # its own. Scanning the whole file for starts produced phantom entries.
+        pos = close_idx + 1
+        if entry_type.lower() in _NON_ENTRY_TYPES:
+            continue
         beg = bib_string[m.start():m.end()]
         rest = bib_string[m.end():close_idx + 1]
         content = bib_string[m.end():close_idx]
@@ -144,6 +155,79 @@ def normalize_text(txt):
     must compare normalized titles, not raw ones.
     """
     return re.sub(r'[\W_]+', '', str(txt).lower().strip())
+
+
+# Entry types that are a published venue by definition.
+_PUBLISHED_TYPES = {"inproceedings", "incollection", "book", "inbook", "proceedings"}
+# Entry types that are a preprint or grey literature by definition.
+_PREPRINT_TYPES = {"misc", "unpublished", "techreport"}
+
+_PREPRINT_JOURNAL_RE = re.compile(r'\b(arxiv|corr|preprint)\b', re.IGNORECASE)
+
+
+def publication_rank(entry):
+    """Score how *published* a BibTeX entry is. Higher wins.
+
+    One rule, used everywhere two candidates describe the same paper:
+
+      * step 3, so resolving never downgrades a published entry to a preprint
+      * the duplicate-row resolver, so the CV keeps the version of record
+      * scripts/dedupe.py
+
+    Before this existed the preference was implicit and partial -- `resolve()`
+    preferred a DBLP published entry over a CoRR one, but two *rows* for the same
+    paper were both emitted regardless of which was the version of record.
+    """
+    etype = str(entry.get("type", "")).lower()
+    content = entry.get("content", "") or ""
+
+    score = 0
+    if etype in _PUBLISHED_TYPES:
+        score += 50
+    elif etype in _PREPRINT_TYPES:
+        score += 0
+    elif etype == "article":
+        journal = extract_field(content, "journal")
+        # An @article in CoRR/arXiv is a preprint wearing a journal's clothes.
+        score += 10 if (journal and _PREPRINT_JOURNAL_RE.search(journal)) else 45
+    else:
+        score += 20
+
+    # Corroborating evidence of a real venue.
+    if extract_field(content, "booktitle"):
+        score += 15
+    if extract_field(content, "doi"):
+        score += 10
+    if extract_field(content, "publisher"):
+        score += 5
+    if extract_field(content, "pages"):
+        score += 5
+    if extract_field(content, "volume"):
+        score += 3
+
+    # Explicit preprint markers pull back down, even on a published-looking type.
+    if re.search(r'\barchiveprefix\s*=', content, re.IGNORECASE):
+        score -= 8
+    if re.search(r'\beprint\s*=', content, re.IGNORECASE):
+        score -= 4
+    return score
+
+
+def choose_published(entries):
+    """Pick the most-published entry. Returns (winner, [losers]).
+
+    Ties break on the longest content, then on the key, so the choice is stable
+    across runs rather than dependent on input order.
+    """
+    if not entries:
+        return None, []
+    ordered = sorted(
+        entries,
+        key=lambda e: (publication_rank(e), len(e.get("content", "")),
+                       e.get("item_name", "")),
+        reverse=True,
+    )
+    return ordered[0], ordered[1:]
 
 
 def find_duplicate_keys(entries):

@@ -36,10 +36,13 @@ sys.path.insert(0, FILE_DIR)
 import notify
 
 from citations_io import read_citation_rows
-from identity import IdentityStore
+from identity import IdentityStore, join_citations
 from pipeline_state import PipelineState
-from table_io import CSV_PATH, XLSX_PATH, append_rows, read_table, set_bib_keys
-from identity import normalize_title, titles_match
+from build_bib import simplify_venue
+from venues import Venues
+from table_io import (CSV_PATH, XLSX_PATH, append_rows, fill_blanks, read_table,
+                      set_bib_keys)
+from identity import MATCH_NORMALIZED, classify_title, normalize_title
 from resolve_arxiv import (
     _PUBLISHED_SOURCES,
     _DEPRIORITIZE_AFTER,
@@ -109,12 +112,28 @@ def step2_add_new_papers(dry_run: bool) -> int:
 
     known_titles = [str(n) for n in df["Name"].dropna()]
 
-    def _is_new(p: dict) -> bool:
+    new_papers, assumed_known = [], []
+    for p in papers:
         if "patent" in (p.get("venue") or "").lower():
-            return False
-        return not any(titles_match(p["title"], existing) for existing in known_titles)
+            continue
+        matched, tier, score = classify_title(p["title"], known_titles)
+        if matched is None:
+            p["_closest"] = (score, "")
+            new_papers.append(p)
+            continue
+        # Judged already present. Report the ones decided on similarity rather
+        # than on an exact normalized title, so "already known" is never a silent
+        # verdict -- a wrong one loses the paper permanently.
+        if tier != MATCH_NORMALIZED:
+            assumed_known.append((p["title"], matched, score))
 
-    new_papers = [p for p in papers if _is_new(p)]
+    if assumed_known:
+        print(f"  {len(assumed_known)} Scholar paper(s) treated as already in the "
+              f"table on title similarity (check these are not new papers):")
+        for title, matched, score in sorted(assumed_known, key=lambda r: r[2]):
+            print(f"    {score:.0%}  scholar: {title[:64]}")
+            print(f"          table: {matched[:64]}")
+
     if not new_papers:
         print("  No new papers found.")
         return 0
@@ -122,6 +141,7 @@ def step2_add_new_papers(dry_run: bool) -> int:
     print(f"  {len(new_papers)} new paper(s):")
     for p in new_papers:
         year_val = int(p["year"]) if str(p["year"]).isdigit() else p["year"]
+        score = p.get("_closest", (0.0, ""))[0]
         norm = normalize_title(p["title"])
         scored = sorted(
             ((difflib.SequenceMatcher(None, norm, normalize_title(t)).ratio(), t)
@@ -150,6 +170,73 @@ def step2_add_new_papers(dry_run: bool) -> int:
     added = append_rows(rows)
     print(f"  Added {added} new row(s) to {os.path.basename(TABLE_PATH)}")
     return added
+
+
+def step2b_enrich(dry_run: bool) -> int:
+    """Fill blank Authors and unusable Venue cells on existing rows from Scholar.
+
+    These were recurring worklist items rather than one-off ones, because step 2
+    creates them on every run: it copies Scholar's venue text verbatim (which
+    never reduces to a venue key, so the paper gets no venueinf and is filed
+    under ArXiv Articles), and a row with no Authors cannot have a BibTeX key
+    generated for it, so step 3 files it under `unknown<year><title>`.
+
+    Both are mechanical, so they are done here instead of being reported.
+    Anything not mechanically decidable is left alone for the worklist.
+    """
+    print("\n[Step 2b] Filling gaps in existing rows from Scholar")
+    df = read_table()
+    rows = read_citation_rows(CITATIONS_CSV)
+    if not rows:
+        print("  No citation data to enrich from.")
+        return 0
+
+    join = join_citations(rows, sorted(set(df["Name"].dropna())),
+                          store=IdentityStore.load())
+    venues = Venues.load()
+
+    author_fills, venue_fills = {}, {}
+    for name, source in join.source.items():
+        match = df[df["Name"] == name]
+        if match.empty:
+            continue
+        row = match.iloc[0]
+
+        authors = str(row.get("Authors") or "").strip()
+        if authors.lower() in ("", "nan", "none") and source.get("authors"):
+            author_fills[name] = source["authors"]
+
+        # Only rewrite a venue cell that the build genuinely cannot place. The
+        # test has to be the *same* resolution build_bib performs -- match plus
+        # the truncation fallback -- otherwise a good cell like "ACL 2016" looks
+        # unplaceable (match_raw alone does not truncate) and gets overwritten
+        # with a bare "acl", throwing away the year.
+        current = row.get("Venue")
+        current_key = simplify_venue(current) if isinstance(current, str) else ""
+        if current_key and venues.known(current_key):
+            continue
+        if not source.get("venue"):
+            continue
+        resolved = venues.match_raw(source["venue"])
+        if resolved and resolved != current_key:
+            venue_fills[name] = resolved
+
+    if not author_fills and not venue_fills:
+        print("  Nothing to fill.")
+        return 0
+
+    for name, authors in sorted(author_fills.items()):
+        print(f"  Authors  {name[:52]:<52} <- {authors[:34]}")
+    for name, venue in sorted(venue_fills.items()):
+        print(f"  Venue    {name[:52]:<52} <- {venue}")
+
+    if dry_run:
+        print("  (dry-run: table not modified)")
+        return len(author_fills) + len(venue_fills)
+
+    filled = fill_blanks({"Authors": author_fills, "Venue": venue_fills})
+    print(f"  Filled {filled} cell(s) in {os.path.basename(TABLE_PATH)}")
+    return filled
 
 
 # ── Step 3 ─────────────────────────────────────────────────────────────────────
@@ -463,6 +550,7 @@ def main() -> None:
         print("\n[Step 2] Skipped.")
     else:
         n_added = step2_add_new_papers(args.dry_run)
+        step2b_enrich(args.dry_run)
 
     print("\n[Step 3] Resolving BibTeX entries")
     if _should_run("resolve", args.skip_resolve):

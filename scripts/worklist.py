@@ -18,6 +18,7 @@ Only open items appear. A section that is absent is done.
 import argparse
 import json
 import os
+import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -36,11 +37,26 @@ BIB_PATH = os.path.join(ROOT, "orig.bib")
 CITATIONS_CSV = os.path.join(ROOT, "citations.csv")
 
 
+# How an item behaves over time. Printed on every section, because "will this
+# keep coming back?" decides whether it is worth automating or worth doing once.
+ONE_OFF = ("one-off",
+           "Fix once and it is gone; nothing regenerates it.")
+SELF_RESOLVING = ("resolves itself",
+                  "The next run clears this without you doing anything.")
+RECURRING = ("recurring",
+             "Will reappear as new papers arrive. Automating it is worthwhile.")
+EXTERNAL = ("waiting on a source",
+            "Cannot be fixed here -- it depends on an external record.")
+INFORMATIONAL = ("informational",
+                 "Handled automatically; listed so the decision is visible.")
+
+
 class Section:
-    def __init__(self, title, blurb, lines):
+    def __init__(self, title, blurb, lines, nature=ONE_OFF):
         self.title = title
         self.blurb = blurb
         self.lines = lines
+        self.nature = nature
 
 
 def gather():
@@ -75,7 +91,7 @@ def gather():
             "Two rows for one paper means both compete for the same citation "
             "count, and both are emitted into the CV. Delete the row whose "
             "BibTeX key you do not want to keep.",
-            lines))
+            lines, nature=ONE_OFF))
 
     dup_keys = find_duplicate_keys(parsed)
     if dup_keys:
@@ -94,11 +110,13 @@ def gather():
             lines.append(f"- `{entry['item_name']}` — {entry['title']}{suffix}")
         sections.append(Section(
             f"Papers with no BibTeX entry ({len(missing)})",
-            "`update.py` retries these automatically each run. An entry with "
-            "several failed lookups is unlikely to resolve itself: paste the "
-            "BibTeX into orig.bib by hand, or use `clibib <doi-or-url>` "
-            "(see README) for the ones DBLP and ACL do not index.",
-            lines))
+            "Retried automatically every run against DBLP, Semantic Scholar, "
+            "the ACL Anthology, OpenReview and OpenAlex. An entry with several "
+            "failed lookups is one no source indexes yet -- usually a very recent "
+            "preprint, a blog post or a workshop paper. Those need either time "
+            "or a hand-pasted entry; `clibib <doi-or-url>` helps when you have "
+            "an identifier.",
+            lines, nature=EXTERNAL))
 
     # ── citation matches that a human should confirm once ────────────────────
     result = join_citations(citations, names, store=store)
@@ -111,24 +129,26 @@ def gather():
         sections.append(Section(
             f"Citation counts matched by title, not by identifier "
             f"({len(result.needs_review)})",
-            "These are matched and in use, but on title similarity rather than "
-            "a stable Scholar ID. Confirm each is the same paper; the next "
-            "`fetch_citations.py` run binds the ID and they stop appearing.",
-            lines))
+            "Matched and in use, but on title similarity rather than a stable "
+            "identifier -- the paper was retitled between preprint and "
+            "publication. Confirm each is really the same paper. The next "
+            "`fetch_citations.py` run records its Scholar ID, after which it "
+            "matches exactly and drops off this list permanently.",
+            lines, nature=SELF_RESOLVING))
 
     if result.ambiguous:
         lines = []
-        for name, candidates in result.ambiguous:
-            lines.append(f"- table: {name}")
+        for name, candidates, total in result.ambiguous:
+            lines.append(f"- table: {name} (using {total})")
             for title, tier, score in candidates:
                 lines.append(f"  - {score:.0%} ({tier}) {title}")
         sections.append(Section(
             f"Ambiguous citation matches ({len(result.ambiguous)})",
-            "More than one Scholar record matched one table row, usually "
-            "because Scholar holds the preprint and the published version "
-            "separately. Merging them in your Scholar profile fixes it at the "
-            "source and adds the counts together.",
-            lines))
+            "Scholar records that are NOT the same paper landed on one table "
+            "row. Their counts are deliberately not added together; the "
+            "most-trusted record is used. Usually means a row title is wrong or "
+            "too generic.",
+            lines, nature=ONE_OFF))
 
     if result.unmatched:
         lines = [f"- {value if value is not None else '—'} citations — {title}"
@@ -138,8 +158,9 @@ def gather():
             f"Scholar records with no row in the table ({len(result.unmatched)})",
             "Either a paper to add, or something Scholar wrongly attributes to "
             "you. Step 2 adds genuinely new papers automatically, so anything "
-            "persisting here needs a decision.",
-            lines))
+            "persisting here is one you have decided not to list, or a "
+            "misattribution to remove from your Scholar profile.",
+            lines, nature=EXTERNAL))
 
     # ── venues that fall through to the draft section ────────────────────────
     # Two different problems, which want different fixes: a venue genuinely
@@ -177,11 +198,13 @@ def gather():
             lines.append(f"  - on: {name[:90]}")
         sections.append(Section(
             f"Venue cells still holding a raw Scholar string ({len(unparsed)})",
-            "Step 2 copies Scholar's venue text verbatim when it adds a paper, "
-            "and that text does not reduce to a venue key -- so the paper gets "
-            "no `venueinf` line and is filed under ArXiv Articles. Replace each "
-            "with the short venue name (`acl`, `tacl`, `neurips`, …).",
-            lines))
+            "Step 2 copies Scholar's venue text verbatim, and this text does "
+            "not reduce to a venue key -- so the paper gets no `venueinf` line "
+            "and is filed under ArXiv Articles. Step 2b now rewrites these "
+            "automatically when Scholar's own venue string can be resolved; "
+            "what is left needs a `match:` phrase in venues.yaml, or is not a "
+            "venue at all (a blog post, a patent).",
+            lines, nature=RECURRING))
 
     if unknown:
         lines = []
@@ -194,7 +217,70 @@ def gather():
             "filed under ArXiv Articles. Add it to `venues.yaml` with a `kind` "
             "of journal or conference, then run "
             "`python scripts/refresh_venues.py` to fill in the ranking.",
-            lines))
+            lines, nature=RECURRING))
+
+    if result.too_close:
+        sections.append(Section(
+            f"Scholar records matching two rows equally well ({len(result.too_close)})",
+            "Not attributed to either row, because picking one would be a coin "
+            "flip. Make the two row titles distinguishable.",
+            [f"- {score:.0%} — {title} ({value if value is not None else '—'} citations)"
+             for title, value, score in result.too_close], nature=ONE_OFF))
+
+    if result.aggregated:
+        sections.append(Section(
+            f"Citation counts summed across Scholar records ({len(result.aggregated)})",
+            "Scholar holds the preprint and the published version as separate "
+            "records; their counts are added, which is what Scholar itself shows "
+            "once the versions are merged. Nothing to do -- merging them in your "
+            "Scholar profile just makes it exact at the source.",
+            [line for name, cands, total in result.aggregated
+             for line in [f"- {total} total — {name}"]
+                        + [f"  - {score:.0%} ({tier}) {title}"
+                           for title, tier, score in cands]],
+            nature=INFORMATIONAL))
+
+    # Venues placed by the truncation fallback rather than an explicit match.
+    truncated = {}
+    for _, row in df.iterrows():
+        raw = row.get("Venue")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        low = raw.lower()
+        if "xiv" in low or "review" in low or "patent" in low:
+            continue
+        key, how = build_bib.venue_resolution(raw)
+        if how != "truncated" or not key or not venues.known(key):
+            continue
+        # Only mid-word cuts are a risk. "ACL 2024" splits at a space-preceded
+        # digit and is safe; "Nature-inspired Computing" splits inside a word and
+        # silently becomes `nature`.
+        # Risky only when the cut is followed by more *word*: a digit after the
+        # key is a year ("ACL2022"), which is unambiguous, whereas a letter means
+        # the truncation split a real word ("Nature-inspired" -> `nature`).
+        rest = low[len(key):]
+        if re.match(r'-?[a-z]', rest):
+            truncated.setdefault((raw.strip(), key), 0)
+            truncated[(raw.strip(), key)] += 1
+    if truncated:
+        sections.append(Section(
+            f"Venues placed by cutting a word in half ({len(truncated)})",
+            "The venue key came from truncating the string mid-word, which "
+            "happens to be right here but is right by luck -- the same rule turns "
+            "\"Nature-inspired Computing\" into `nature`. Add a `match:` phrase "
+            "in venues.yaml to make each one certain.",
+            [f"- `{key}` <- {raw[:80]}" for (raw, key), _ in sorted(truncated.items())],
+            nature=INFORMATIONAL))
+
+    shared = store.shared_identifiers()
+    if shared:
+        sections.append(Section(
+            f"One identifier claimed by two papers ({len(shared)})",
+            "Two BibTeX keys carry the same Scholar ID or DOI, which means the "
+            "same paper is recorded twice. Usually a duplicate row that "
+            "scripts/dedupe.py can remove.",
+            [f"- {field} `{value}` on: {', '.join(keys)}"
+             for field, value, keys in shared], nature=ONE_OFF))
 
     # ── identifier conflicts ─────────────────────────────────────────────────
     conflicts = store.conflicts()
@@ -205,7 +291,7 @@ def gather():
             "usually means two papers were conflated. Resolve by deleting the "
             "wrong record from `identity.json`.",
             [f"- `{key}` {field}: {', '.join(str(v) for v in values)}"
-             for key, field, values in conflicts]))
+             for key, field, values in conflicts], nature=ONE_OFF))
 
     total = sum(len(s.lines) for s in sections)
     return sections, total, result
@@ -222,8 +308,19 @@ def render(sections, result):
 
     if not sections:
         out += ["Nothing open. ✓", ""]
+        return "\n".join(out)
+
+    needs_you = [s for s in sections
+                 if s.nature in (ONE_OFF, RECURRING)]
+    out += [f"**{len(needs_you)} of {len(sections)} sections need a decision from "
+            f"you**; the rest resolve themselves, wait on an external source, or "
+            f"are handled automatically and listed for visibility.", ""]
+
     for section in sections:
-        out += [f"## {section.title}", "", section.blurb, ""]
+        label, explain = section.nature
+        out += [f"## {section.title}", "",
+                f"*{label}* — {explain}", "",
+                section.blurb, ""]
         out += section.lines
         out += [""]
     return "\n".join(out)
@@ -253,7 +350,7 @@ def main():
     if not args.quiet:
         print(f"  {total} open item(s) in {len(sections)} section(s) → WORKLIST.md")
         for section in sections:
-            print(f"    {section.title}")
+            print(f"    [{section.nature[0]:<20}] {section.title}")
     return 0
 
 

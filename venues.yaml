@@ -32,6 +32,8 @@ aliases:
 venues:
   # ── Conferences, ranked by Google Scholar ───────────────────────────────────
   acl:
+    match:
+      - annual meeting of the association for computational
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -39,6 +41,8 @@ venues:
     description: 1st of 20 in computational linguistics conferences by Google Scholar
 
   emnlp:
+    match:
+      - empirical methods in natural language processing
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -46,6 +50,9 @@ venues:
     description: 2nd of 20 in computational linguistics conferences by Google Scholar
 
   naacl:
+    match:
+      - north american chapter of the association for computational
+      - naacl-hlt
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -53,6 +60,8 @@ venues:
     description: 3rd of 20 in computational linguistics conferences by Google Scholar
 
   coling:
+    match:
+      - international conference on computational linguistics
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -60,6 +69,8 @@ venues:
     description: 5th of 20 in computational linguistics conferences by Google Scholar
 
   eacl:
+    match:
+      - european chapter of the association for computational
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -67,6 +78,10 @@ venues:
     description: 6th of 20 in computational linguistics conferences by Google Scholar
 
   lrec:
+    match:
+      - language resources and evaluation
+      # The joint LREC-COLING editions are filed under LREC here.
+      - lrec-coling
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -74,6 +89,8 @@ venues:
     description: 7th of 20 in computational linguistics conferences by Google Scholar
 
   conll:
+    match:
+      - conference on computational natural language
     kind: conference
     scholar_metrics:
       category: eng_computationallinguistics
@@ -81,6 +98,9 @@ venues:
     description: 19th of 20 in computational linguistics conferences by Google Scholar
 
   neurips:
+    match:
+      - neural information processing systems
+      - nips
     kind: conference
     scholar_metrics:
       category: eng_artificialintelligence
@@ -88,6 +108,8 @@ venues:
     description: 1st of 20 in artificial intelligence conferences by Google Scholar
 
   iclr:
+    match:
+      - international conference on learning representations
     kind: conference
     scholar_metrics:
       category: eng_artificialintelligence
@@ -95,6 +117,8 @@ venues:
     description: 2nd of 20 in artificial intelligence conferences by Google Scholar
 
   icml:
+    match:
+      - international conference on machine learning
     kind: conference
     scholar_metrics:
       category: eng_artificialintelligence
@@ -102,6 +126,8 @@ venues:
     description: 3rd of 20 in artificial intelligence conferences by Google Scholar
 
   aaai:
+    match:
+      - aaai conference on artificial intelligence
     kind: conference
     scholar_metrics:
       category: eng_artificialintelligence
@@ -110,6 +136,8 @@ venues:
 
   # ── Journals ────────────────────────────────────────────────────────────────
   tacl:
+    match:
+      - transactions of the association for computational linguistics
     kind: journal
     scholar_metrics:
       category: eng_computationallinguistics
@@ -121,6 +149,8 @@ venues:
   # Prose below is hand-written judgement rather than a lookup, so it is marked
   # manual and the refresher will only ever update its `metrics` block.
   jml:
+    match:
+      - journal of memory and language
     kind: journal
     manual: true
     openalex:
@@ -128,6 +158,8 @@ venues:
     description: Top Linguistic journal with an impact factor 4.014
 
   nature:
+    match:
+      - nature
     kind: journal
     manual: true
     openalex:
@@ -135,6 +167,8 @@ venues:
     description: The top venue in the world under many metrics, with an impact factor of 50.5
 
   nature machine intelligence:
+    match:
+      - nature machine intelligence
     kind: journal
     manual: true
     openalex:
@@ -142,6 +176,8 @@ venues:
     description: Journal with an 18.8 impact factor, higher than the top journals and conferences in Main Machine Learning venues.
 
   tmlr:
+    match:
+      - transactions on machine learning research
     kind: journal
     manual: true
     openalex:
@@ -149,6 +185,8 @@ venues:
     description: New journal, but with many top-tier papers and a very competitive acceptance rate.
 
   cloud:
+    match:
+      - transactions on cloud computing
     kind: journal
     manual: true
     openalex:
@@ -157,6 +195,8 @@ venues:
 
   # ── Venues with no ranking to look up ───────────────────────────────────────
   colm:
+    match:
+      - conference on language modeling
     kind: conference
     manual: true
     description: New conference, but with many top-tier papers and a very competitive acceptance rate.

@@ -13,8 +13,12 @@ yet, fetch the best available BibTeX. Sources in descending preference:
   3. DOI via clibib      optional, identifier-only. Covers DOI-bearing records
                          that DBLP and the ACL Anthology do not index
                          (journals, book chapters). Never used for title search
-  4. DBLP CoRR entry     a clean arXiv entry, as a fallback
-  5. arXiv abstract page last resort
+  4. OpenAlex            keyless, and indexes journals and preprints the earlier
+                         sources miss. Gated on a 0.90 title-similarity check.
+                         A preprint result is labelled as such so it cannot
+                         replace a published entry
+  5. DBLP CoRR entry     a clean arXiv entry, as a fallback
+  6. arXiv abstract page last resort
 
 Only sources in `_PUBLISHED_SOURCES` may *replace* an existing entry; an
 arXiv-derived result never does, since that would downgrade a published paper
@@ -40,7 +44,7 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
-from bib_utils import normalize_text, parse_bibtex, read_df
+from bib_utils import normalize_text, parse_bibtex, publication_rank, read_df
 from identity import harvest_ids_from_bibtex, harvest_ids_from_s2
 
 DEFAULT_BIB    = os.path.join(FILE_DIR, "orig.bib")
@@ -300,6 +304,121 @@ def fetch_openreview_bib(forum_id: str, original_key: str) -> str | None:
     )
 
 
+# ── OpenAlex ──────────────────────────────────────────────────────────────────
+#
+# Keyless, and covers what DBLP and the ACL Anthology do not index -- Nature and
+# other journals, and preprints neither has picked up. Measured on this repo's own
+# unresolved tail, it resolves 6 of 10 that the earlier sources missed.
+#
+# Two queries, because they behave differently: `filter=title.search:` is a
+# phrase filter over titles and finds exact papers the fuzzy `search` param
+# misses; `search` is broader and catches the rest. Both are gated on a strict
+# title-similarity check, because OpenAlex happily returns an unrelated paper
+# rather than nothing -- "MuLER: Detailed and Scalable Reference-based
+# Evaluation" came back as "Regional climate modeling on European scales".
+
+OPENALEX_WORKS = "https://api.openalex.org/works"
+_OPENALEX_SELECT = ("id,title,doi,type,publication_year,authorships,"
+                    "primary_location,biblio")
+
+# Below this title similarity an OpenAlex result is a different paper.
+_OPENALEX_MIN_RATIO = 0.90
+
+
+def _openalex_query(url):
+    raw = _curl_get(url)
+    if not raw:
+        return []
+    try:
+        return (json.loads(raw) or {}).get("results") or []
+    except (json.JSONDecodeError, AttributeError):
+        return []
+
+
+def search_openalex(title):
+    """Return the OpenAlex work matching `title`, or None."""
+    if len(normalize_text(title)) < 10:
+        return None
+    mailto = ""
+    try:
+        import config
+        if getattr(config, "CONTACT_EMAIL", ""):
+            mailto = "&mailto=" + quote(config.CONTACT_EMAIL)
+    except Exception:
+        pass
+
+    urls = [
+        f"{OPENALEX_WORKS}?filter=title.search:{quote(title)}"
+        f"&per-page=3&select={_OPENALEX_SELECT}{mailto}",
+        f"{OPENALEX_WORKS}?{urlencode({'search': title, 'per-page': '3'})}"
+        f"&select={_OPENALEX_SELECT}{mailto}",
+    ]
+    for url in urls:
+        for work in _openalex_query(url):
+            ratio = difflib.SequenceMatcher(
+                None, _simplify_title(title), _simplify_title(work.get("title") or "")
+            ).ratio()
+            if ratio >= _OPENALEX_MIN_RATIO:
+                return work
+        time.sleep(0.4)
+    return None
+
+
+def openalex_to_bibtex(work, original_key):
+    """Render an OpenAlex work as BibTeX. Returns (bibtex, is_published)."""
+    title = (work.get("title") or "").strip()
+    if not title:
+        return None, False
+
+    authors = " and ".join(
+        (a.get("author") or {}).get("display_name", "")
+        for a in (work.get("authorships") or [])
+        if (a.get("author") or {}).get("display_name")
+    )
+    year = work.get("publication_year") or ""
+    doi = str(work.get("doi") or "").replace("https://doi.org/", "")
+    source = ((work.get("primary_location") or {}).get("source") or {})
+    venue = (source.get("display_name") or "").strip()
+    biblio = work.get("biblio") or {}
+    work_type = (work.get("type") or "").lower()
+
+    # An arXiv/preprint record is not a published version, and must not be
+    # allowed to replace a better entry -- hence the flag rather than a guess.
+    is_preprint = (work_type in ("preprint", "posted-content")
+                   or "arxiv" in venue.lower()
+                   or doi.startswith("10.48550/"))
+
+    if is_preprint:
+        entry_type, venue_field = "misc", None
+    elif work_type in ("article", "review", "paratext") and venue:
+        entry_type, venue_field = "article", ("journal", venue)
+    elif venue:
+        entry_type, venue_field = "inproceedings", ("booktitle", venue)
+    else:
+        entry_type, venue_field = "misc", None
+
+    lines = [f"@{entry_type}{{{original_key},",
+             f"  title = {{{title}}},"]
+    if authors:
+        lines.append(f"  author = {{{authors}}},")
+    if venue_field:
+        lines.append(f"  {venue_field[0]} = {{{venue_field[1]}}},")
+    if year:
+        lines.append(f"  year = {{{year}}},")
+    for field, key in (("volume", "volume"), ("issue", "number")):
+        if biblio.get(field):
+            lines.append(f"  {key} = {{{biblio[field]}}},")
+    if biblio.get("first_page"):
+        pages = str(biblio["first_page"])
+        if biblio.get("last_page"):
+            pages += f"--{biblio['last_page']}"
+        lines.append(f"  pages = {{{pages}}},")
+    if doi:
+        lines.append(f"  doi = {{{doi}}},")
+    lines.append("}")
+    return "\n".join(lines), not is_preprint
+
+
 # ── clibib (optional) ─────────────────────────────────────────────────────────
 #
 # https://github.com/delip/clibib -- a client for a Zotero translation server,
@@ -493,6 +612,21 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
             _remember(doi=known_doi)
             return bib, "DOI (clibib)"
 
+    # Step 2c — OpenAlex, which indexes journals and book chapters that DBLP and
+    # the ACL Anthology do not. Its result may itself be a preprint, so the label
+    # distinguishes the two: only the published one is allowed to replace an
+    # existing entry.
+    work = search_openalex(title)
+    if work:
+        bib, is_published = openalex_to_bibtex(work, original_key)
+        if bib:
+            ids = {}
+            doi = str(work.get("doi") or "").replace("https://doi.org/", "")
+            if doi and not doi.startswith("10.48550/"):
+                ids["doi"] = doi
+            _remember(**ids)
+            return bib, ("OpenAlex" if is_published else "OpenAlex (preprint)")
+
     # Step 3 — arXiv fallback
     if corr_bib:
         return _replace_key(corr_bib, original_key), "arXiv (DBLP/CoRR)"
@@ -507,7 +641,8 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
 # Sources trusted enough to *replace* an existing orig.bib entry. An arXiv-derived
 # result never replaces anything -- it would downgrade a published entry back to a
 # preprint. "DOI (clibib)" qualifies because a DOI is an exact identifier.
-_PUBLISHED_SOURCES = {"DBLP", "ACL Anthology", "OpenReview", "DOI (clibib)"}
+_PUBLISHED_SOURCES = {"DBLP", "ACL Anthology", "OpenReview", "DOI (clibib)",
+                      "OpenAlex"}
 
 
 def gen_key(authors: str, year: str, title: str) -> str:
@@ -529,9 +664,26 @@ def update_bib_inplace(
 ) -> tuple:
     """Apply resolved BibTeX in-place; return (new_bib_text, n_replaced, n_appended)."""
     n_replaced = 0
+    existing_by_key = {e["item_name"]: e for e in parse_bibtex(bib_text)}
     for key, new_bib, source in updates:
         if source not in _PUBLISHED_SOURCES:
             continue
+
+        # Never trade a more-published entry for a less-published one. The source
+        # label says where the replacement came from, not how good it is: DBLP
+        # can return a workshop @misc for a paper whose existing entry is the
+        # @inproceedings version of record.
+        old = existing_by_key.get(key)
+        if old is not None:
+            candidates = parse_bibtex(new_bib)
+            if candidates:
+                new_rank = publication_rank(candidates[0])
+                old_rank = publication_rank(old)
+                if new_rank < old_rank:
+                    print(f"  [keep existing] {key}: {source} result ranks lower "
+                          f"({new_rank} < {old_rank})", file=sys.stderr)
+                    continue
+
         pattern = re.compile(
             r'@\w+\s*\{' + re.escape(key) + r',.*?\r?\n\}',
             re.DOTALL,

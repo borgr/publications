@@ -220,6 +220,28 @@ def append_rows(new_rows, path=CSV_PATH):
     return added
 
 
+def fill_blanks(by_column, path=CSV_PATH):
+    """Fill blank cells: {column: {row_name: value}}. Returns cells written.
+
+    Only ever writes where the cell is currently empty, so a value a human typed
+    is never overwritten by a scraped one.
+    """
+    df = read_table(path if os.path.exists(path) else None)
+    written = 0
+    for column, assignments in by_column.items():
+        if column not in df.columns or not assignments:
+            continue
+        for name, value in assignments.items():
+            blank = df[column].isna() | (df[column].astype(str).str.strip() == "")
+            mask = (df["Name"] == name) & blank
+            if mask.any():
+                df.loc[mask, column] = value
+                written += int(mask.sum())
+    if written:
+        write_table(df, path)
+    return written
+
+
 def set_bib_keys(assignments, path=CSV_PATH):
     """Fill in the Bib cell for rows identified by exact Name. Returns the count."""
     df = read_table(path if os.path.exists(path) else None)

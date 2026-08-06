@@ -5,7 +5,8 @@ from typing import NamedTuple
 
 import pandas as pd
 
-from bib_utils import find_duplicate_keys, normalize_text, parse_bibtex, read_df
+from bib_utils import (choose_published, find_duplicate_keys, normalize_text,
+                       parse_bibtex, publication_rank, read_df)
 from citations_io import read_citation_rows
 from identity import IdentityStore, find_duplicate_titles, join_citations
 from venues import Venues
@@ -57,14 +58,34 @@ def shorten_booktitle(s):
 
 
 def simplify_venue(name):
-    """Reduce a raw venue string to a venues.yaml key."""
+    """Reduce a raw venue string to a venues.yaml key.
+
+    Two strategies, in order. `match_raw` handles the full official names that
+    Scholar reports ("Proceedings of the 26th Conference on Computational Natural
+    Language ..." -> conll); the truncation heuristic handles the short forms a
+    human types ("ACL 2024" -> acl). Whatever comes out of the fallback may not
+    be a known key, and the worklist reports those rather than hiding them.
+    """
+    return venue_resolution(name)[0]
+
+
+def venue_resolution(name):
+    """Return (venue_key, how) where `how` is "matched", "truncated" or "".
+
+    The truncation fallback splits on the first digit, dash, paren, caret or
+    asterisk, which can cut mid-word: "Nature-inspired Computing" truncates to
+    "nature" and would be filed as a Nature paper. Keeping the fallback (it is
+    what makes "EMNLP-Findings" work) but reporting which venues relied on it
+    means such a misfile is visible in WORKLIST.md instead of silent -- add a
+    `match:` phrase in venues.yaml to resolve one explicitly.
+    """
     if pd.isna(name) or not name:
-        return ""
+        return "", ""
+    matched = _VENUES.match_raw(name)
+    if matched:
+        return matched, "matched"
     s = str(name).lower()
-    alias = _VENUES.alias_for(s)
-    if alias:
-        return alias
-    return _VENUE_SPLIT_RE.split(s, maxsplit=1)[0].strip()
+    return _VENUE_SPLIT_RE.split(s, maxsplit=1)[0].strip(), "truncated"
 
 
 def load_citations(citations_path):
@@ -99,13 +120,25 @@ def _build_name2cite(citation_rows, df_names, store=None):
             print(f"  [{tier} {score:.0%}] table: {name[:64]}")
             if normalize_text(incoming) != normalize_text(name):
                 print(f"{'':>21}scholar: {incoming[:64]}")
+    if result.aggregated:
+        print("Summed across multiple Scholar records for the same paper "
+              "(merging them in your Scholar profile makes this exact):")
+        for name, cands, total in result.aggregated:
+            print(f"  {total} total — {name[:60]}")
+            for title, tier, score in cands:
+                print(f"{'':>9}<- [{tier} {score:.0%}] {title[:60]}")
     if result.ambiguous:
-        print("AMBIGUOUS: more than one Scholar row matched one table row. "
-              "Both counts cannot be right — check for a duplicate row:")
-        for name, cands in result.ambiguous:
+        print("AMBIGUOUS: Scholar records that are NOT the same paper matched one "
+              "table row — check for a duplicate or mistyped row:")
+        for name, cands, total in result.ambiguous:
             print(f"  table: {name[:66]}")
             for title, tier, score in cands:
                 print(f"{'':>9}<- [{tier} {score:.0%}] {title[:60]}")
+    if result.too_close:
+        print("Scholar records that matched two table rows equally well "
+              "(not attributed to either):")
+        for title, value, score in result.too_close:
+            print(f"  {score:.0%}  {title[:66]}")
     if result.unmatched:
         print("Cited papers with no row in the publications table:")
         for title, value in result.unmatched:
@@ -133,7 +166,7 @@ def _categorize(venue_simple, is_arxiv, is_review, is_workshop):
     return None
 
 
-def _process_entries(parsed, df, name2cite):
+def _process_entries(parsed, df, name2cite, suppressed=()):
     """Build wzmn.bib text and categorise each paper.
 
     Returns (bib_out, BibCategories, bibs_seen, under_review_count, non_paper_count).
@@ -143,6 +176,9 @@ def _process_entries(parsed, df, name2cite):
     bibs_seen = under_review = non_papers = 0
 
     for dic in parsed:
+        if dic["item_name"] in suppressed:
+            # A duplicate of a paper already emitted from its published entry.
+            continue
         matches = df[df["Bib"] == dic["item_name"]]
         if matches.shape[0] > 1:
             print(f"Warning: duplicate xlsx rows for bib key {dic['item_name']!r}, using first")
@@ -254,6 +290,39 @@ def _bind_scholar_ids(result, df, store):
     store.save()
 
 
+def resolve_duplicate_rows(parsed, df):
+    """Decide which entry to emit when two table rows are the same paper.
+
+    Returns (suppressed_keys, notes). The version of record wins, by
+    `publication_rank` -- so an ACL @inproceedings beats the same paper's arXiv
+    @misc. Without this both rows are emitted and the CV lists the paper twice,
+    which is what it was doing.
+
+    This resolves the *output*; `scripts/dedupe.py` fixes the table itself. Both
+    use the same rule, so they cannot disagree.
+    """
+    by_key = {e["item_name"]: e for e in parsed}
+    suppressed, notes = set(), []
+
+    for names in find_duplicate_titles(df["Name"].dropna()).values():
+        entries, rows_without_entry = [], []
+        for name in names:
+            cell = df[df["Name"] == name]["Bib"]
+            key = str(cell.iloc[0]).strip() if len(cell) else ""
+            if key and key in by_key:
+                entries.append(by_key[key])
+            else:
+                rows_without_entry.append(name)
+        if len(entries) < 2:
+            continue
+        winner, losers = choose_published(entries)
+        for loser in losers:
+            suppressed.add(loser["item_name"])
+        notes.append((winner["item_name"], [l["item_name"] for l in losers],
+                      publication_rank(winner)))
+    return suppressed, notes
+
+
 def _report_duplicates(parsed, df):
     """Report same-paper-entered-twice, which no downstream join can resolve.
 
@@ -306,7 +375,13 @@ def main():
     name2cite = join.matched
     _bind_scholar_ids(join, df, store)
 
-    bib_out, cats, bibs_seen, under_review, non_papers = _process_entries(parsed, df, name2cite)
+    suppressed, dedupe_notes = resolve_duplicate_rows(parsed, df)
+    for winner, losers, rank in dedupe_notes:
+        print(f"Duplicate paper: emitting {winner!r} (publication rank {rank}) and "
+              f"omitting {losers} from the CV. Run scripts/dedupe.py to fix the table.")
+
+    bib_out, cats, bibs_seen, under_review, non_papers = _process_entries(
+        parsed, df, name2cite, suppressed=suppressed)
 
     enhanced_path = os.path.join(FILE_DIR, "overleaf", "Wzmn.bib")
     with open(enhanced_path, "w") as f:

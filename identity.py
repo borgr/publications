@@ -189,12 +189,35 @@ class IdentityStore:
     # ── lookup ───────────────────────────────────────────────────────────────
 
     def index(self, field):
-        """Return {identifier_value: paper_key} for one ID field."""
+        """Return {identifier_value: paper_key} for one ID field.
+
+        First key wins, deterministically by sort order. A value claimed by more
+        than one paper is a data problem, not something to resolve here -- see
+        `shared_identifiers()`.
+        """
         out = {}
-        for key, rec in self.records.items():
-            value = rec.get(field)
-            if value:
+        for key in sorted(self.records):
+            value = (self.records[key] or {}).get(field)
+            if value and value not in out:
                 out[value] = key
+        return out
+
+    def shared_identifiers(self):
+        """Return [(field, value, [keys])] where one identifier names two papers.
+
+        Two bib keys carrying the same Scholar ID or DOI means the same paper is
+        recorded twice -- usually a duplicate table row. Silently collapsing them
+        (which `index` has to do) would hide it, so it is surfaced instead.
+        """
+        out = []
+        for field in ID_FIELDS:
+            owners = {}
+            for key in sorted(self.records):
+                value = (self.records[key] or {}).get(field)
+                if value:
+                    owners.setdefault(value, []).append(key)
+            out.extend((field, value, keys)
+                       for value, keys in sorted(owners.items()) if len(keys) > 1)
         return out
 
     def title_index(self):
@@ -223,7 +246,12 @@ class JoinResult:
         # name alone cannot find its way back to the source record.
         self.source = {}
         self.needs_review = []   # (row_name, incoming_title, tier, score)
-        self.ambiguous = []      # (row_name, [(incoming_title, tier, score), ...])
+        # Several records for one paper, summed. Informational, not an action.
+        self.aggregated = []     # (row_name, [(title, tier, score), ...], total)
+        # Several records that are NOT the same paper landing on one row. Real.
+        self.ambiguous = []      # (row_name, [(title, tier, score), ...], total)
+        # One record that could equally be two different rows. Reported, never guessed.
+        self.too_close = []      # (incoming_title, value, score)
         self.unmatched = []      # (incoming_title, value)
 
     def tier_counts(self):
@@ -295,12 +323,7 @@ def join_citations(citation_rows, row_names, store=None):
     # Sorted, not set-ordered: when two table rows are duplicates of each other
     # only one can win, and which one must not depend on PYTHONHASHSEED.
     row_names = sorted({str(n).strip() for n in row_names if str(n).strip()})
-    names_by_norm, stems_by_norm = {}, {}
-    for name in row_names:
-        names_by_norm.setdefault(normalize_title(name), name)
-        stem = title_stem(name)
-        if stem:
-            stems_by_norm.setdefault(stem, name)
+    names_by_norm, stems_by_norm = _title_indexes(row_names)
 
     # scholar_id -> the table row it was previously bound to
     scholar_to_key = store.index("scholar_id")
@@ -312,7 +335,7 @@ def join_citations(citation_rows, row_names, store=None):
             key_to_name[key] = name
 
     tier_rank = {MATCH_EXACT_ID: 3, MATCH_NORMALIZED: 2, MATCH_FUZZY: 1}
-    claims = {}  # row_name -> (tier, score, incoming_row, value)
+    claims = {}  # row_name -> [(tier, score, incoming_row), ...]
 
     for row in citation_rows:
         title = str(row.get("title") or "").strip()
@@ -330,72 +353,94 @@ def join_citations(citation_rows, row_names, store=None):
 
         if name is None:
             if tier == MATCH_TOO_CLOSE:
-                result.ambiguous.append((title, [(title, MATCH_TOO_CLOSE, score)]))
+                result.too_close.append((title, value, score))
             result.unmatched.append((title, value))
             continue
 
-        prev = claims.get(name)
-        if prev is None:
-            claims[name] = (tier, score, row, value)
-            continue
-        prev_tier, prev_score, prev_row, prev_value = prev
-        prev_title = str(prev_row.get("title") or "")
-        if tier_rank[tier] > tier_rank[prev_tier] or (
-                tier == prev_tier and score > prev_score):
-            claims[name] = (tier, score, row, value)
-            result.ambiguous.append((name, [(prev_title, prev_tier, prev_score),
-                                            (title, tier, score)]))
-        elif tier_rank[tier] < tier_rank[prev_tier] or score < prev_score:
-            result.ambiguous.append((name, [(prev_title, prev_tier, prev_score),
-                                            (title, tier, score)]))
-        else:
-            # Same tier and identical score: genuinely indistinguishable.
-            result.ambiguous.append((name, [(prev_title, prev_tier, prev_score),
-                                            (title, tier, score)]))
+        claims.setdefault(name, []).append((tier, score, row))
 
-    for name, (tier, score, row, value) in claims.items():
-        title = str(row.get("title") or "")
-        result.matched[name] = value
+    for name, matches in claims.items():
+        # Best tier and its row represent the paper; the count is the *total*
+        # across every record that matched.
+        matches.sort(key=lambda m: (tier_rank[m[0]], m[1]), reverse=True)
+        tier, score, best_row = matches[0]
+
+        titles = [str(m[2].get("title") or "") for m in matches]
+        # Are these records all the same paper? Only then may their counts be
+        # added. Two *different* papers landing on one row is a data problem, and
+        # summing them would invent a number.
+        same_paper = all(
+            difflib.SequenceMatcher(
+                None, normalize_title(t), normalize_title(titles[0])
+            ).ratio() >= FUZZY_REVIEW_CUTOFF
+            for t in titles[1:])
+
+        if same_paper:
+            # Scholar splits a paper across records when it has not merged the
+            # preprint with the published version. Each record counts a
+            # different set of citing papers, so the paper's total is their sum,
+            # which is what Scholar itself shows once the versions are merged.
+            present = [m[2].get("citations") for m in matches
+                       if m[2].get("citations") is not None]
+            # All-None stays None: "no count reported" is not a count of zero.
+            result.matched[name] = sum(present) if present else None
+        else:
+            # Fall back to the most-trusted single record rather than inventing
+            # a total across papers that are not the same.
+            result.matched[name] = best_row.get("citations")
+
         result.method[name] = tier
-        result.source[name] = row
-        # Only genuine similarity guesses need a human. A normalized-title match
-        # is an identity claim -- normalization strips only what differs between
-        # sources by convention (case, punctuation, BibTeX's capitalization
-        # braces) -- so flagging those would bury the four real questions under a
-        # hundred non-questions.
+        result.source[name] = best_row
+
+        if len(matches) > 1:
+            entry = (name, [(titles[i], m[0], m[1]) for i, m in enumerate(matches)],
+                     result.matched[name])
+            (result.aggregated if same_paper else result.ambiguous).append(entry)
+
         if tier == MATCH_FUZZY:
-            result.needs_review.append((name, title, tier, score))
+            result.needs_review.append((name, str(best_row.get("title") or ""),
+                                        tier, score))
 
     return result
 
 
-def titles_match(incoming, known, cutoff=FUZZY_REVIEW_CUTOFF):
-    """True if two titles are plausibly the same paper.
+def _title_indexes(known_titles):
+    """Build the normalized and colon-stem lookups `_candidate_key` needs."""
+    names_by_norm, stems_by_norm = {}, {}
+    for name in sorted({str(t).strip() for t in known_titles if str(t).strip()}):
+        names_by_norm.setdefault(normalize_title(name), name)
+        stem = title_stem(name)
+        if stem:
+            stems_by_norm.setdefault(stem, name)
+    return names_by_norm, stems_by_norm
 
-    Used by step 2 to decide whether a Scholar result is a paper the table
-    already knows about. The bar is deliberately *low* here, because the cost of
-    the two errors is asymmetric: a false positive means a new paper is missed
-    and shows up on the next run, while a false negative writes a duplicate row
-    into the table -- and a duplicate row makes the citation join ambiguous
-    forever after, as the two "Findings of the Second BabyLM Challenge" rows
-    already demonstrate.
+
+def classify_title(incoming, known_titles):
+    """Is `incoming` one of `known_titles`? Returns (matched, tier, score).
+
+    Deliberately the *same* decision as the citation join -- it calls
+    `_candidate_key`, the join's own matcher.
+
+    Using a stricter bar here instead was a bug: the join accepted the retitled
+    "Will it blend? blending weak and strong..." as the table's "Will it Blend?
+    Weak and Manual..." at 0.88, while step 2 called it new and appended a row.
+    So every fuzzy-matched paper gained a duplicate row on every single run,
+    each of which then made the citation join ambiguous. Five such rows appeared
+    the first time this ran.
+
+    One question ("are these the same paper?") gets one answer. Because the bar
+    is permissive, every non-exact verdict is reported by the caller rather than
+    applied silently -- a wrongly-skipped new paper shows up in a report, whereas
+    a wrongly-added duplicate quietly corrupts the CV and the citation counts.
     """
-    a, b = normalize_title(incoming), normalize_title(known)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    if title_stem(incoming) and title_stem(incoming) == title_stem(known):
-        return True
-    if difflib.SequenceMatcher(None, a, b).ratio() >= cutoff:
-        return True
-    # One title contained in the other: Scholar truncates, and authors abbreviate
-    # ("TextArena" for "TextArena: A Framework for ...").
-    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
-    if len(shorter) >= MIN_FUZZY_CHARS and (longer.startswith(shorter)
-                                            or longer.endswith(shorter)):
-        return True
-    return False
+    names_by_norm, stems_by_norm = _title_indexes(known_titles)
+    return _candidate_key(names_by_norm, stems_by_norm, incoming)
+
+
+def titles_match(incoming, known):
+    """True if two titles are the same paper. Pairwise form of `classify_title`."""
+    matched, _tier, _score = classify_title(incoming, [known])
+    return matched is not None
 
 
 def find_duplicate_titles(row_names):
