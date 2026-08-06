@@ -133,6 +133,11 @@ browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
 identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
 `WORKLIST.md`, `overleaf/Wzmn.bib`.
 
+`enhanced.bib` is **legacy — do not read.** It is an old snapshot of
+`build_bib.py`'s output from when it wrote there instead of
+`overleaf/Wzmn.bib`. Nothing regenerates it, so it drifts further behind every
+run. To use the bibliography from outside this repo, read `orig.bib`.
+
 ### Code
 
 | File | Purpose |

@@ -88,13 +88,17 @@ def test_only_published_sources_replace_an_existing_entry():
     assert "Should Not Land" not in text
 
 
-def test_published_source_replaces_the_entry():
-    replacement = '@inproceedings{doe2024preprint, title = {Now Published}}'
+def test_published_source_upgrades_the_entry():
+    """The venue moves across; the curated title stays. See merge_published."""
+    replacement = ('@inproceedings{doe2024preprint, title = {Now Published}, '
+                   'booktitle = {ACL 2024}, pages = {1--9}}')
     text, replaced, appended = update_bib_inplace(
         PREPRINT, [("doe2024preprint", replacement, "DBLP")], [])
     assert replaced == 1
-    assert "Now Published" in text
-    assert "A Preprint" not in text
+    assert "ACL 2024" in text and "1--9" in text
+    assert text.lstrip().startswith("@inproceedings")
+    assert "A Preprint" in text        # the title is not the source's to change
+    assert "Now Published" not in text
 
 
 def test_appending_skips_a_key_that_already_exists():
@@ -264,14 +268,15 @@ def test_clibib_non_bibtex_response_is_rejected(monkeypatch):
     assert resolve_arxiv.fetch_by_doi("10.1/x", "k1") is None
 
 
-def test_doi_source_may_replace_an_existing_entry():
-    """A DOI is exact, so unlike an arXiv result it is allowed to replace."""
+def test_doi_source_may_upgrade_an_existing_entry():
+    """A DOI is exact, so unlike an arXiv result it is allowed to write."""
     assert "DOI (clibib)" in resolve_arxiv._PUBLISHED_SOURCES
-    replacement = '@article{doe2024preprint, title = {Published Version}}'
+    replacement = ('@article{doe2024preprint, title = {Published Version}, '
+                   'journal = {A Real Journal}, volume = {12}}')
     text, replaced, _ = update_bib_inplace(
         PREPRINT, [("doe2024preprint", replacement, "DOI (clibib)")], [])
     assert replaced == 1
-    assert "Published Version" in text
+    assert "A Real Journal" in text
 
 
 # ── regex replacement must never be treated as a template ────────────────────
@@ -280,10 +285,12 @@ def test_doi_source_may_replace_an_existing_entry():
 # because re.sub parses its *replacement* for escapes and BibTeX is full of
 # backslashes. All of the run's work was lost.
 
+# The booktitle carries the backslashes too, because the venue is the field the
+# transplant actually moves -- a LaTeX-safe title is no use if the venue is not.
 LATEX_HEAVY = (r'@inproceedings{doe2024preprint,' "\n"
                r'  title = {Mod{\`e}les de langue: an {\it italic} study},' "\n"
                r'  author = {Rapha{\"e}l Doe and Jos{\'e} Roe},' "\n"
-               r'  booktitle = {ACL},' "\n"
+               r'  booktitle = {Actes de la Conf{\'e}rence: an {\it italic} venue},' "\n"
                r'  year = {2024}' "\n"
                r'}')
 
@@ -292,8 +299,8 @@ def test_replacement_containing_latex_escapes_does_not_raise():
     text, replaced, _ = update_bib_inplace(
         PREPRINT, [("doe2024preprint", LATEX_HEAVY, "DBLP")], [])
     assert replaced == 1
-    assert r'{\it italic}' in text
-    assert "A Preprint" not in text
+    assert r"Conf{\'e}rence" in text
+    assert r'{\it italic} venue' in text
 
 
 def test_appending_an_entry_with_latex_escapes_does_not_raise():
@@ -320,7 +327,10 @@ def test_a_backslash_heavy_entry_survives_a_full_round_trip():
     text, replaced, _ = update_bib_inplace(
         PREPRINT, [("doe2024preprint", LATEX_HEAVY, "DBLP")], [])
     (entry,) = [e for e in parse_bibtex(text) if e["item_name"] == "doe2024preprint"]
-    assert "italic" in entry["title"]
+    from bib_utils import extract_field, is_wellformed_entry
+    assert "italic" in extract_field(entry["content"], "booktitle")
+    assert is_wellformed_entry(entry["beg"] + entry["rest"],
+                               expected_key="doe2024preprint")
 
 
 # ── keys must be unique, and must never contain "nan" ────────────────────────
@@ -372,3 +382,108 @@ def test_generated_key_never_collides_with_an_existing_bib_entry():
     existing = '@inproceedings{doe2024published, title = {X}}'
     (entry,) = get_missing_bib_entries(existing, df=df)
     assert entry["item_name"] != "doe2024published"
+
+
+# ── the venue transplant ──────────────────────────────────────────────────────
+# Every test here is a real regression: replacing an entry wholesale silently
+# deleted seven `pretitle` macros in one run, and the DBLP title reader's brace
+# handling decided whether a published version was found at all.
+
+_CURATED = """@article{doe2023thing,
+    pretitle={\\COL\\META},
+  title        = {The Thing: A Hand-Repaired Title},
+  author       = {Doe, Jane and Roe, Richard},
+  journal      = {CoRR},
+  volume       = {abs/2301.00001},
+  year         = {2023},
+  eprint       = {2301.00001},
+  archiveprefix = {arXiv}
+}"""
+
+_DBLP_PUBLISHED = """@inproceedings{doe2023thing,
+  author    = {Jane Doe and Richard Roe},
+  title     = {\\texttt{Thing}: {A} {DBLP} Title With {B}races},
+  booktitle = {Proceedings of Something Real},
+  pages     = {1--10},
+  publisher = {ACL},
+  year      = {2023},
+  doi       = {10.0000/REAL.1}
+}"""
+
+
+def test_transplant_keeps_pretitle_title_and_author():
+    merged = resolve_arxiv.merge_published(_CURATED, _DBLP_PUBLISHED)
+    assert "pretitle={\\COL\\META}" in merged
+    assert "A Hand-Repaired Title" in merged
+    assert "Doe, Jane and Roe, Richard" in merged
+    assert "DBLP Title" not in merged
+
+
+def test_transplant_moves_the_venue_and_drops_the_preprint_one():
+    merged = resolve_arxiv.merge_published(_CURATED, _DBLP_PUBLISHED)
+    assert "Proceedings of Something Real" in merged
+    assert "pages" in merged and "1--10" in merged
+    assert "CoRR" not in merged
+    assert merged.lstrip().startswith("@inproceedings")
+
+
+def test_transplant_keeps_the_arxiv_id():
+    """It stays true after publication, and downstream tools match on it."""
+    merged = resolve_arxiv.merge_published(_CURATED, _DBLP_PUBLISHED)
+    assert "2301.00001" in merged
+
+
+def test_transplant_output_still_parses_as_one_entry():
+    from bib_utils import is_wellformed_entry
+    merged = resolve_arxiv.merge_published(_CURATED, _DBLP_PUBLISHED)
+    assert is_wellformed_entry(merged, expected_key="doe2023thing")
+
+
+def test_transplant_falls_back_to_the_original_on_unusable_input():
+    assert resolve_arxiv.merge_published(_CURATED, "not bibtex at all") == _CURATED
+
+
+def test_update_bib_inplace_preserves_pretitle():
+    """The end-to-end shape of the seven-macro loss."""
+    new_text, n_replaced, _ = update_bib_inplace(
+        _CURATED + "\n", [("doe2023thing", _DBLP_PUBLISHED, "DBLP")], [])
+    assert n_replaced == 1
+    assert "pretitle" in new_text
+    assert "Proceedings of Something Real" in new_text
+
+
+# ── which DBLP result is accepted ─────────────────────────────────────────────
+
+def test_dblp_title_reads_through_brace_groups():
+    """`[^}]+` stopped at the first brace, so \\texttt{Holmes} became a 6-char title."""
+    bib = '@article{x, title = {\\texttt{Holmes}: {A} Benchmark for Language}, year = {2024}}'
+    assert "Benchmark for Language" in resolve_arxiv._dblp_title(bib)
+
+
+def test_similar_title_from_a_different_year_is_rejected():
+    """"Holistic Evaluation of Language Models" is not "Towards Holistic
+    Evaluation of Large Audio-Language Models" three years later."""
+    candidate = ('@inproceedings{other, title = {Towards Holistic Evaluation of '
+                 'Large Audio-Language Models}, booktitle = {EMNLP}, year = {2025}}')
+    published, _corr = resolve_arxiv.pick_published(
+        [candidate], query_title="Holistic Evaluation of Language Models",
+        query_year=2022)
+    assert published is None
+
+
+def test_an_identical_title_keeps_its_publication_lag():
+    """ComPEFT's journal version is two years after its preprint."""
+    title = "ComPEFT: Compression for Communicating Parameter Efficient Updates"
+    candidate = ('@inproceedings{c, title = {' + title + '}, '
+                 'booktitle = {Some Venue}, year = {2025}}')
+    published, _corr = resolve_arxiv.pick_published(
+        [candidate], query_title=title, query_year=2023)
+    assert published is not None
+
+
+def test_year_guard_does_not_fire_without_a_query_year():
+    candidate = ('@inproceedings{c, title = {A Somewhat Similar Paper Title Here}, '
+                 'booktitle = {V}, year = {2025}}')
+    published, _corr = resolve_arxiv.pick_published(
+        [candidate], query_title="A Somewhat Similar Paper Title Here")
+    assert published is not None

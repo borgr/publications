@@ -244,11 +244,16 @@ def publication_rank(entry):
     if extract_field(content, "volume"):
         score += 3
 
-    # Explicit preprint markers pull back down, even on a published-looking type.
-    if re.search(r'\barchiveprefix\s*=', content, re.IGNORECASE):
-        score -= 8
-    if re.search(r'\beprint\s*=', content, re.IGNORECASE):
-        score -= 4
+    # Explicit preprint markers pull back down -- but only when nothing else in
+    # the entry evidences a real venue. An arXiv id stays true after publication
+    # and is worth keeping in the record, so penalising a @inproceedings that has
+    # a booktitle, pages and a DOI purely for remembering its eprint ranked it
+    # below an otherwise identical entry that had forgotten it.
+    if not (extract_field(content, "booktitle") or extract_field(content, "publisher")):
+        if re.search(r'\barchiveprefix\s*=', content, re.IGNORECASE):
+            score -= 8
+        if re.search(r'\beprint\s*=', content, re.IGNORECASE):
+            score -= 4
     return score
 
 

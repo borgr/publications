@@ -44,8 +44,8 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
-from bib_utils import (escape_field_value, is_wellformed_entry, normalize_text,
-                       parse_bibtex, publication_rank, read_df)
+from bib_utils import (escape_field_value, extract_field, is_wellformed_entry,
+                       normalize_text, parse_bibtex, publication_rank, read_df)
 from identity import harvest_ids_from_bibtex, harvest_ids_from_s2
 
 DEFAULT_BIB    = os.path.join(FILE_DIR, "orig.bib")
@@ -230,8 +230,17 @@ def _simplify_title(t: str) -> str:
 
 
 def _dblp_title(bibtex: str) -> str:
-    m = re.search(r'\btitle\s*=\s*[{"]([^}"]+)', bibtex, re.IGNORECASE)
-    return m.group(1) if m else ""
+    """The whole title value, brace groups included.
+
+    `[^}"]+` stopped at the first closing brace, and DBLP protects capitals
+    inside titles almost everywhere -- `{A} Benchmark`, `Findings of the
+    {B}aby{LM}`, `\\texttt{Holmes}`. So the "title" this returned was often the
+    first few words, which then failed pick_published's 0.72 guard and discarded
+    a correctly-found published version: Holmes came back as `\\texttt{Holmes`
+    and scored 0.16 against its own title, so the TACL entry was rejected and the
+    paper stayed a CoRR preprint even though DBLP had the journal version.
+    """
+    return extract_field(bibtex, "title")
 
 
 def _is_corr(bibtex: str) -> bool:
@@ -261,11 +270,30 @@ def search_dblp(title: str) -> list[str]:
     return [e.strip() for e in entries if e.strip().startswith("@")]
 
 
-def pick_published(bibtex_list: list[str], query_title: str = "") -> tuple[str | None, str | None]:
+def _bib_year(bibtex: str) -> int | None:
+    m = re.search(r'\byear\s*=\s*\{?\s*(\d{4})', bibtex)
+    return int(m.group(1)) if m else None
+
+
+# Above this, two titles are the same title, so a publication lag is expected --
+# ComPEFT's journal version is two years after its preprint under an identical
+# title. Below it, agreement on the year is required as well.
+_SAME_TITLE_RATIO = 0.95
+
+
+def pick_published(bibtex_list: list[str], query_title: str = "",
+                   query_year: int | None = None) -> tuple[str | None, str | None]:
     """Return (first_published, first_corr) from DBLP results.
 
     When query_title is given, published entries whose title similarity is below
     0.72 are skipped — this guards against DBLP returning a different paper.
+
+    Similarity alone is not enough: difflib rewards a long common subsequence
+    however much *extra* text there is, and the extra text is often exactly what
+    distinguishes two papers. "Holistic Evaluation of Language Models" scores
+    0.76 against "SEA-HELM: Southeast Asian Holistic Evaluation of Language
+    Models", a different paper three years later. So a merely-similar title also
+    has to agree on the year.
     """
     published = corr = None
     for bib in bibtex_list:
@@ -281,6 +309,10 @@ def pick_published(bibtex_list: list[str], query_title: str = "") -> tuple[str |
                         _simplify_title(_dblp_title(bib)),
                     ).ratio()
                     if ratio < 0.72:
+                        continue
+                    year = _bib_year(bib)
+                    if (ratio < _SAME_TITLE_RATIO and query_year and year
+                            and not 0 <= year - query_year <= 1):
                         continue
                 published = bib
     return published, corr
@@ -606,9 +638,15 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
             return fetch_arxiv_bib(arxiv_id, original_key), "arXiv (no usable title)"
         return "", "no usable title"
 
+    # The entry's own year, used to reject a similarly-titled different paper.
+    year_m = (re.search(r'\byear\s*=\s*\{?\s*(\d{4})', existing_content)
+              or re.search(r'\b(20\d{2})\b', existing_content))
+
     # Step 1 — DBLP title search
     dblp_results = search_dblp(title)
-    published_bib, corr_bib = pick_published(dblp_results, query_title=title)
+    published_bib, corr_bib = pick_published(
+        dblp_results, query_title=title,
+        query_year=int(year_m.group(1)) if year_m else None)
     if published_bib:
         _remember(**harvest_ids_from_bibtex(published_bib))
         return _replace_key(published_bib, original_key), "DBLP"
@@ -619,7 +657,6 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     if arxiv_id:
         s2_data = query_s2_by_arxiv(arxiv_id)
     else:
-        year_m = re.search(r'\b(20\d{2})\b', existing_content)
         s2_data = query_s2_by_title(title, year_m.group(1) if year_m else "")
     time.sleep(1.5)
 
@@ -736,6 +773,109 @@ def gen_key(authors: str, year: str, title: str, taken=()) -> str:
         if w.lower() not in skip and len(w) > 2][1:])
 
 
+def split_entry(bibtex: str) -> tuple:
+    """(entry_type, key, [(field, raw_value, raw_source)]).
+
+    `raw_value` keeps its braces or quotes; `raw_source` is the field exactly as
+    it was written, leading whitespace and all, so a field nothing touches is
+    emitted back byte-for-byte rather than reformatted.
+    """
+    m = re.match(r'\s*@(\w+)\s*\{\s*([^,]+),', bibtex)
+    if not m:
+        return "", "", []
+    i, fields = m.end(), []
+    while i < len(bibtex):
+        fm = re.compile(r'\s*([A-Za-z][\w-]*)\s*=\s*').match(bibtex, i)
+        if not fm:
+            break
+        i = start = fm.end()
+        if bibtex[i] == "{":
+            depth = 0
+            while i < len(bibtex):
+                if bibtex[i] == "{":
+                    depth += 1
+                elif bibtex[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        i += 1
+                        break
+                i += 1
+        elif bibtex[i] == '"':
+            i = bibtex.find('"', i + 1) + 1 or len(bibtex)
+        else:
+            while i < len(bibtex) and bibtex[i] not in ",}\n":
+                i += 1
+        fields.append((fm.group(1).lower(), bibtex[start:i], bibtex[fm.start():i]))
+        j = bibtex.find(",", i)
+        if j < 0:
+            break
+        i = j + 1
+    return m.group(1), m.group(2).strip(), fields
+
+
+# The venue is what resolving an entry is *for*, and it is the only thing that
+# moves. Everything else belongs to the bibliography: `pretitle` is a private
+# categorization macro that exists in no external record, and `title`/`author`
+# are hand-repaired here -- DBLP's Holmes title is
+# `\texttt{Holmes} {\unicode{8981}} ...`, which does not compile and is not what
+# the paper is called. `eprint`/`archiveprefix` stay too: the arXiv id remains
+# true after publication, and downstream tools match on it.
+_VENUE_FIELDS = ("journal", "booktitle", "volume", "number", "pages", "publisher",
+                 "series", "editor", "address", "month", "year", "doi", "url",
+                 "timestamp", "biburl", "bibsource")
+# DBLP's own bookkeeping. Still updated, but a new `pages` belongs next to
+# `volume`, not trailing after the record's provenance.
+_BOOKKEEPING = ("timestamp", "biburl", "bibsource")
+_CORR_VENUE = re.compile(r'^\{?\s*(corr\b|abs/|arxiv)', re.I)
+
+
+def merge_published(old_bib: str, new_bib: str) -> str:
+    """Move the venue across; leave every other field exactly as it was written.
+
+    Replacing the whole entry -- which is what this used to do -- silently
+    deleted every hand edit in it. It cost seven `pretitle` macros in one run,
+    invisibly: the CV still built, the affected papers just lost the tags that
+    place them. Rebuilding the whole entry is nearly as bad in practice, since it
+    re-indents forty lines to change three and a bibliography is reviewed by hand.
+    """
+    _otype, key, old_fields = split_entry(old_bib)
+    ntype, _nkey, new_fields = split_entry(new_bib)
+    if not ntype or not new_fields or not old_fields:
+        return old_bib
+    new = {f: v for f, v, _ in new_fields if f in _VENUE_FIELDS}
+    cols = [len(f) + len(s) for f, s in
+            re.findall(r'\n\s*([A-Za-z][\w-]*)( *)=', old_bib)]
+    col = max(set(cols), key=cols.count) if cols else 0     # the column most lines use
+    col = max(col, max(len(f) for f in list(new) + [f for f, _, _ in old_fields]) + 1)
+
+    def fmt(field, value):
+        return f"\n  {field.ljust(col)}= {value}"
+
+    out, seen, last_venue = [], set(), -1
+    for f, v, raw in old_fields:
+        if f in new:
+            out.append(fmt(f, new[f]) if new[f].strip() != v.strip() else raw)
+            seen.add(f)
+        elif f == "journal" and "booktitle" in new:
+            continue      # a paper is not both a journal article and a proceedings paper
+        elif f in ("journal", "volume") and _CORR_VENUE.match(v.strip()):
+            continue      # the preprint venue, with nothing in the record to replace it
+        else:
+            out.append(raw)
+        if f in _VENUE_FIELDS and f not in _BOOKKEEPING:
+            last_venue = len(out) - 1
+    # Venue fields the entry did not have -- pages and volume, usually -- go next
+    # to the ones it did, not at the end after DBLP's bookkeeping.
+    add = [fmt(f, v) for f, v, _ in new_fields if f in _VENUE_FIELDS and f not in seen]
+    at = last_venue + 1 if last_venue >= 0 else len(out)
+    out[at:at] = add
+    merged = f"@{ntype}{{{key}," + ",".join(out) + "\n}"
+    # Never hand back something that does not parse: a field this could not read
+    # would otherwise be written out malformed and take the rest of the file with
+    # it. Falling back to the original entry costs one upgrade, not the file.
+    return merged if is_wellformed_entry(merged, expected_key=key) else old_bib
+
+
 def update_bib_inplace(
     bib_text: str,
     updates: list,   # list of (key, new_bibtex, source)
@@ -784,8 +924,13 @@ def update_bib_inplace(
         start = bib_text.find(old_text)
         if start == -1:
             continue
-        bib_text = (bib_text[:start] + new_bib.rstrip('\n')
-                    + bib_text[start + len(old_text):])
+        # Transplant the venue rather than swapping the entry. What the lookup
+        # found is a venue; the title, author list and `pretitle` in the existing
+        # entry are curated here and are not the source's to overwrite.
+        merged = merge_published(old_text, new_bib.rstrip('\n'))
+        if merged.strip() == old_text.strip():
+            continue
+        bib_text = bib_text[:start] + merged + bib_text[start + len(old_text):]
         n_replaced += 1
     n_appended = 0
     for _key, new_bib in new_entries:
@@ -909,6 +1054,9 @@ def main() -> None:
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--skip-missing", action="store_true",
                         help="Only process arXiv entries; skip xlsx entries with no key")
+    parser.add_argument("--in-place", action="store_true",
+                        help="also write the published venues back into --bib "
+                             "(title, author and pretitle are left alone; diff it)")
     args = parser.parse_args()
 
     with open(args.bib) as f:
@@ -938,6 +1086,7 @@ def main() -> None:
 
     resolved_bibs: list[str] = []
     report: list[tuple[str, str, bool]] = []
+    updates: list[tuple[str, str, str]] = []
 
     for entry in candidates:
         key = entry["item_name"]
@@ -957,6 +1106,10 @@ def main() -> None:
         report.append((key, source, bool(bib)))
         if bib:
             resolved_bibs.append(bib)
+            # Only an entry that is still a preprint has anything to gain, and
+            # only a published record has anything to give.
+            if _is_corr(content) and not _is_corr(bib):
+                updates.append((key, bib, source))
         time.sleep(0.5)
 
     with open(args.output, "w") as f:
@@ -972,7 +1125,17 @@ def main() -> None:
     print("─" * 72)
     written = sum(1 for _, _, ok in report if ok)
     print(f"\n{written}/{len(candidates)} entries written to {args.output}")
-    print("Review and copy desired entries into orig.bib manually.")
+
+    if not args.in_place:
+        print(f"{len(updates)} preprint entries have a published version. To write "
+              f"their venues into\n{os.path.basename(args.bib)} (leaving title, "
+              f"author and pretitle alone), rerun with --in-place.")
+        return
+    new_text, n_replaced, _ = update_bib_inplace(bib_text, updates, [])
+    if n_replaced:
+        with open(args.bib, "w") as f:
+            f.write(new_text)
+    print(f"{n_replaced} entries upgraded in place in {args.bib} — `git diff` it.")
 
 
 if __name__ == "__main__":
