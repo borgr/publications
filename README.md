@@ -1,8 +1,8 @@
 # Publications Pipeline
 
 Keeps a publications CV on Overleaf in sync with Google Scholar, from one
-command. Designed to be re-run for years with as little manual work as possible:
-every step is idempotent, anything the pipeline cannot decide itself lands in
+command. Built to be re-run for years with as little manual work as possible:
+every step is idempotent, anything it cannot decide lands in
 [WORKLIST.md](WORKLIST.md), and a failure is never silent.
 
 ```
@@ -12,58 +12,108 @@ Google Scholar ──► citations.csv ──┐
 papers.csv ────────────────────────┤     (resolved)   (+ venue info,        (+ \nocite blocks,
   (venue, tags, authorship)        │                   citation counts)      citations, h-index)
 venues.yaml ───────────────────────┘
-  (rankings, impact metrics)
+identity.json  (harvested IDs)
 ```
 
-## Usage
+## The one command
 
 ```bash
-python update.py                 # everything, end to end
-python update.py --dry-run       # show what would change; no writes, no network
-python update.py --force         # ignore the "inputs unchanged" checks
-python update.py --no-push       # build locally, do not touch the remotes
-python update.py --skip-fetch    # reuse the citation counts already on disk
-
-python scripts/worklist.py       # regenerate WORKLIST.md on its own
-python scripts/refresh_venues.py # refresh venue rankings and impact metrics
-python -m pytest tests/ -q       # the test suite
+python update.py
 ```
 
-`update.py` exits non-zero if anything failed, and posts a desktop notification
-(`--no-notify` to suppress), so an unattended run cannot fail quietly while the
-CV keeps looking current.
+Everything else is occasional. `update.py` exits non-zero on failure and posts a
+desktop notification, so an unattended run cannot fail quietly while the CV keeps
+looking current.
 
-### Steps
+```bash
+python update.py --dry-run    # show what would change: no writes, no network
+python update.py --force      # ignore the "inputs unchanged" checks
+python update.py --no-push    # build locally, leave the remotes alone
+python update.py --skip-fetch # reuse the citation counts already on disk
+```
+
+### What it does
 
 Each step is skipped when the **contents** of its inputs are unchanged since it
-last succeeded, recorded in `.pipeline_state.json`. Content hashing rather than
-mtimes, so a fresh clone behaves correctly and a no-op rewrite does not cascade.
+last succeeded (recorded in `.pipeline_state.json`) — content hashes, not mtimes,
+so a fresh clone behaves correctly and a no-op rewrite does not cascade.
 
 | # | Step | What it does |
 |---|------|--------------|
 | 1 | fetch | Scrapes the Scholar profile → `citations.csv`, `profile_stats.json`. Time-based (`--fetch-age`, default 24h). |
-| 2 | new papers | Adds anything in Scholar but not in `papers.csv`. |
-| 3 | resolve | Upgrades arXiv entries in `orig.bib` to their published version, and looks up rows with no entry. |
+| 2 | new papers | Adds anything in Scholar that is not in `papers.csv` yet. |
+| 2b | enrich | Fills blank Authors from Scholar, and resolves a venue from the paper's BibTeX entry. This is what moves a paper out of the CV's ArXiv section once it is published. |
+| 3 | resolve | Upgrades arXiv entries in `orig.bib` to their published version, and looks up rows that have no entry. |
 | 4 | build | `orig.bib` + `papers.csv` + `venues.yaml` → `overleaf/Wzmn.bib`. |
 | 5 | tex | Updates `\nocite{}` blocks, total citations and h-index in `overleaf/main.tex`. |
 | 6 | worklist | Regenerates `WORKLIST.md`. |
 | 7 | push | Commits and pushes to GitHub and Overleaf, rebasing first if a remote moved. |
 
-## Scheduling
-
-Split deliberately, because Scholar blocks datacenter IP ranges — a hosted
-runner gets a CAPTCHA, not data:
+## Occasionally
 
 ```bash
-python scripts/install_schedule.py          # weekly local run (macOS launchd)
-python scripts/install_schedule.py --show   # print the plist / cron line instead
-python scripts/install_schedule.py --uninstall
+python scripts/worklist.py          # regenerate WORKLIST.md alone (no network)
+python scripts/worklist.py --check  # exit 1 if anything needs a decision
+python scripts/dedupe.py --dry-run  # find papers listed twice, keep the published one
+python scripts/refresh_venues.py    # refresh venue rankings and impact metrics
+python -m pytest tests/ -q          # the test suite
 ```
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) covers what does not need
-Scholar: the test suite on two Python versions, a rebuild from committed data, a
-determinism check, and a failure if the table has duplicate rows or an ambiguous
-citation join. It needs no secrets and works in a fork.
+## Once, when setting up
+
+```bash
+python scripts/install_schedule.py       # weekly local run (macOS launchd)
+python scripts/install_schedule.py --show  # print the plist / cron line instead
+python scripts/migrate_to_csv.py         # only if you still have the .xlsx
+python init_new_author.py                # wipe personal data, for a fork
+```
+
+The step scripts (`fetch_citations.py`, `build_bib.py`, `rebuild_tex.py`,
+`resolve_arxiv.py`) also run standalone, which is useful when debugging one stage.
+
+## Setting it up
+
+```bash
+git clone --recurse-submodules https://github.com/borgr/publications.git
+cd publications
+pip install -r requirements.txt
+```
+
+Then edit `config.py` — that is the only file that is author-specific:
+
+```python
+AUTHOR_NAME = "Your Name"
+SCHOLAR_USER_ID = "..."      # from your Scholar profile URL
+S2_API_KEY = ""              # optional, see below
+CONTACT_EMAIL = ""           # optional, for OpenAlex's polite pool
+```
+
+`curl` and `git` must be on your PATH.
+
+### A Semantic Scholar API key is worth the two minutes
+
+Semantic Scholar's unauthenticated access is *"1000 requests per second shared
+among all unauthenticated users"* — a global pool, so a long run gets throttled
+almost immediately. A free key gets *"1 RPS"* reserved, which is slower on paper
+but actually completes. It matters more than it looks: the ACL Anthology and
+OpenReview are both reached *through* Semantic Scholar, so losing it loses three
+sources.
+
+Request one at <https://www.semanticscholar.org/product/api>, then set
+`S2_API_KEY` in `config.py` or in the environment. Without a key everything still
+works, with more waiting.
+
+## Scheduling
+
+Split deliberately, because Scholar blocks datacenter IP ranges — a hosted runner
+gets a CAPTCHA, not data:
+
+- **Locally**, weekly, via `scripts/install_schedule.py`. This is the one that
+  fetches from Scholar.
+- **[GitHub Actions](.github/workflows/ci.yml)** covers what does not need
+  Scholar: the test suite on two Python versions, a rebuild from committed data,
+  a determinism check, and a failure if the table has duplicate rows or an
+  ambiguous citation join. No secrets, works in a fork.
 
 ## Files
 
@@ -72,14 +122,14 @@ citation join. It needs no secrets and works in a fork.
 | File | Purpose |
 |------|---------|
 | `papers.csv` | **Source of truth.** One row per paper: venue, authors, year, BibTeX key, and the tag flags that drive CV sections. Opens in Excel/Numbers/LibreOffice. |
-| `venues.yaml` | Venue rankings, impact metrics and the sentence each venue prints. `manual: true` protects prose from the refresher. |
-| `config.py` | Author name and Scholar user ID. The only file to change when forking. |
-| `orig.bib` | Curated BibTeX. Mostly maintained by step 3; hand-edit for anything it cannot resolve. |
+| `venues.yaml` | Venue rankings, impact metrics, and the sentence each venue prints. |
+| `config.py` | Author name, Scholar ID, optional API keys. |
+| `orig.bib` | Curated BibTeX. Mostly maintained by step 3; hand-edit what it cannot resolve. |
 
 ### Data the pipeline owns
 
-Generated but **committed**, because each one is expensive to rebuild or useful
-to browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
+Generated but **committed**, because each is expensive to rebuild or useful to
+browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
 identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
 `WORKLIST.md`, `overleaf/Wzmn.bib`.
 
@@ -87,18 +137,18 @@ identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
 
 | File | Purpose |
 |------|---------|
-| `update.py` | The 7-step orchestrator. |
+| `update.py` | The orchestrator. |
 | `fetch_citations.py` | Scholar scraper, including each paper's stable `citation_for_view` ID. |
-| `table_io.py` | Reads/validates/writes `papers.csv`; addresses columns by name. |
-| `identity.py` | Stable identifiers, and the citation join built on them. |
+| `table_io.py` | Reads/validates/writes `papers.csv`, by column name. |
+| `identity.py` | Stable identifiers, and the joins built on them. |
 | `citations_io.py` | `citations.csv` reading and writing. |
-| `resolve_arxiv.py` | arXiv → published BibTeX, via DBLP / S2 / ACL / OpenReview / DOI. |
+| `resolve_arxiv.py` | arXiv → published BibTeX, via DBLP / S2 / ACL / OpenReview / DOI / OpenAlex. |
 | `build_bib.py` | Builds `Wzmn.bib` and assigns each paper to a CV section. |
 | `rebuild_tex.py` | Updates `main.tex` in place. |
+| `bib_utils.py` | Brace-counting BibTeX parser, text normalization, publication ranking. |
 | `venues.py` | Loads `venues.yaml`. |
 | `pipeline_state.py` | Content-hash step skipping. |
-| `bib_utils.py` | Brace-counting BibTeX parser and text normalization. |
-| `notify.py` | Failure notification (macOS Notification Center, GitHub Actions annotation). |
+| `notify.py` | Failure notification (macOS Notification Center, Actions annotation). |
 | `papers_fig.py`, `papers_graph.py` | Standalone figures. Not part of the pipeline; needs `requirements-figures.txt`. |
 
 ## How papers are matched across sources
@@ -106,46 +156,69 @@ identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
 Titles are not stable: BibTeX braces capitalization (`{B}aby{LM}`), Scholar
 lowercases subtitles, papers get retitled between preprint and publication, and
 the table is typed by hand. So matching is by **identifier**, and titles are only
-a bootstrap:
+the bootstrap:
 
 1. **Stable ID.** Scholar's `citation_for_view` per paper; `externalIds` from
-   Semantic Scholar for ArXiv/DOI/ACL/DBLP together — which is the crosswalk for
-   when the ACL record knows no arXiv ID and vice versa. Stored in
-   `identity.json` the first time it is seen.
+   Semantic Scholar for ArXiv/DOI/ACL/DBLP together — the crosswalk for when the
+   ACL record knows no arXiv ID and vice versa. Recorded in `identity.json` the
+   first time it is seen, so a fuzzy match happens at most once per paper.
 2. **Normalized title.** Case, punctuation and BibTeX braces stripped. An
    identity claim, not a guess.
-3. **Fuzzy title,** ≥0.90 automatically, ≥0.75 with confirmation, and only when
-   it beats the runner-up by a clear margin. Every fuzzy match is listed in
-   `WORKLIST.md`; confirming one and re-fetching binds its ID, after which it
-   never needs judging again.
+3. **Fuzzy title**, only with a clear margin over the runner-up, and reported.
 
-Anything ambiguous is reported, never guessed.
+Anything ambiguous is reported, never guessed. Step 2's "is this paper already
+known?" calls the same matcher as the citation join, deliberately: when they
+disagreed, step 2 appended a duplicate row for every fuzzy-matched paper on
+every run.
 
-## GitHub ↔ Overleaf
+Two Scholar records for one paper are **summed** — Scholar splits a paper across
+records until you merge the versions, and each record counts different citing
+papers. Records that are *not* the same paper are never summed.
 
-`overleaf/` is a git submodule pointing at the Overleaf project. Step 7 pushes
-`main.tex` and `Wzmn.bib` there, then pushes this repo to GitHub. If the Overleaf
-remote has moved — because you edited the project in Overleaf's own editor — the
-push rebases onto it and retries, so that no longer needs a manual pull.
+## Which entry wins when a paper appears twice
 
-Pull Overleaf-side edits back with `git -C overleaf pull origin`.
+`bib_utils.publication_rank` and `choose_published` are the single rule, used by
+step 3 (never downgrade), by the build (emit the version of record), and by
+`scripts/dedupe.py`:
+
+1. published beats preprint — the version of record is what a CV should cite;
+2. within the same class, the newer year wins, because two preprints of one paper
+   are its v1 and v2 and the newer carries the current title;
+3. then publication rank, content length and key, so the result is stable.
+
+Duplicates are found by **identifier** as well as by title, which catches the
+retitled ones no title comparison can.
+
+## Venues
+
+`venues.yaml` holds each venue's `kind` (`journal`, `conference`, or `other` for a
+real outlet with no ranking, like a blog), its `description` (the sentence the CV
+prints), and `match:` phrases used to recognise it in a raw venue string.
+
+`scripts/refresh_venues.py` refreshes the numbers from Google Scholar Metrics and
+OpenAlex. A venue marked `manual: true` keeps its prose; only its `metrics` block
+is updated. When this file was created, four of eleven rankings were wrong — EMNLP
+and NAACL both claimed to be 1st.
+
+A venue the pipeline cannot place gets no `venueinf` line and its paper is filed
+under ArXiv Articles, so unplaceable venues are reported in `WORKLIST.md`. Add a
+`match:` phrase to fix one.
 
 ## Optional: clibib for the tail
 
-[clibib](https://github.com/delip/clibib) resolves an identifier to BibTeX
-through a Zotero translation server. `pip install clibib` and step 3 will use it
-for **DOIs**, covering journals and book chapters that DBLP and the ACL Anthology
-do not index. Without it the pipeline behaves exactly as before.
+[clibib](https://github.com/delip/clibib) resolves an identifier to BibTeX via a
+Zotero translation server. `pip install clibib` and step 3 will use it for
+**DOIs**, covering journals and book chapters that DBLP and the ACL Anthology do
+not index. It resolved 10 entries on a real run. Without it the pipeline behaves
+exactly as before.
 
-It is deliberately never used for title search. Measured against this repo's own
-unresolved papers, its free-text lookup returned a confidently wrong paper 2
-times in 5 with no error raised — "Reinforcement learning with large action
-spaces for neural machine translation" came back as an unrelated Springer
-proceedings volume. Its identifier paths are exact and fast, and its own README
-recommends preferring them.
+Deliberately never used for title search: measured against this repo's own
+unresolved papers, its free-text lookup returned a confidently wrong paper 2 times
+in 5 with no error raised. Its identifier paths are exact and fast, and its own
+README recommends preferring them.
 
-As a manual helper it is genuinely useful for `WORKLIST.md` items where you have
-a DOI, ISBN, arXiv ID or publisher URL:
+As a manual helper it is genuinely useful for worklist items where you have an
+identifier:
 
 ```bash
 clibib 10.1038/s41586-021-03215-w
@@ -161,33 +234,11 @@ Each entry in `Wzmn.bib` carries a `citations={N}` field, which the BST emits as
 \newcommand{\bibcitecount}[1]{}                              % hide (default)
 ```
 
-## Forking this for your own publications
+## GitHub ↔ Overleaf
 
-```bash
-git clone --recurse-submodules https://github.com/borgr/publications.git
-cd publications
-pip install -r requirements.txt
+`overleaf/` is a git submodule pointing at the Overleaf project. Step 7 pushes
+`main.tex` and `Wzmn.bib` there, then pushes this repo to GitHub. If the Overleaf
+remote has moved — because you edited the project in Overleaf's own editor — the
+push rebases onto it and retries, so that no longer needs a manual pull.
 
-python init_new_author.py --overleaf-url https://git.overleaf.com/<your-project-id>
-```
-
-Then set `AUTHOR_NAME` and `SCHOLAR_USER_ID` in `config.py` — the pipeline
-propagates the name into the BST files and `main.tex` on every run — and run
-`python update.py`. Nothing else is author-specific.
-
-`curl` and `git` must be on your PATH.
-
-## Migrating from the spreadsheet
-
-`papers.csv` replaced `Contributions_table.xlsx`. If you have an unmigrated
-checkout, `read_table()` still falls back to the xlsx, and:
-
-```bash
-python scripts/migrate_to_csv.py --dry-run
-python scripts/migrate_to_csv.py
-```
-
-converts it, verifying every value round-trips and reporting anything suspect.
-CSV keeps the spreadsheet workflow while being diffable in git — which matters
-because in the binary file six columns had rotted to empty unnoticed, one of them
-(`inter\eval`) feeding a CV tag that consequently never rendered.
+Pull Overleaf-side edits back with `git -C overleaf pull origin`.

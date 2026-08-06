@@ -164,8 +164,32 @@ def update_tex(tex, cats: BibCategories):
     return tex
 
 
+def check_overleaf_present() -> str:
+    """Return "" if overleaf/main.tex is usable, else what to do about it.
+
+    `overleaf/` is a git submodule, so a clone without `--recurse-submodules`
+    leaves it empty and this step died on a bare FileNotFoundError five steps
+    into a run. Saying so plainly is the difference between a two-second fix and
+    a confusing one.
+    """
+    if os.path.exists(TEX_PATH):
+        return ""
+    if not os.path.isdir(OVERLEAF_DIR) or not os.listdir(OVERLEAF_DIR):
+        return (f"overleaf/ is empty — it is a git submodule that was not checked "
+                f"out.\n  Fix with:  git submodule update --init\n"
+                f"  For a fork, point it at your own project:  "
+                f"python init_new_author.py --overleaf-url <your-overleaf-git-url>")
+    return (f"{TEX_PATH} is missing, but overleaf/ has other files.\n"
+            f"  If this is a new Overleaf project, seed it:  "
+            f"cp {os.path.join(OVERLEAF_DIR, 'template.tex')} {TEX_PATH}")
+
+
 def main(cats: BibCategories = None):
     """Update overleaf/main.tex. If cats is provided, skip re-running build_bib."""
+    problem = check_overleaf_present()
+    if problem:
+        raise FileNotFoundError(problem)
+
     patch_bst_author()
 
     if cats is None:

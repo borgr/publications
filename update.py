@@ -26,6 +26,7 @@ Usage:
 import argparse
 import difflib
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -52,7 +53,6 @@ from resolve_arxiv import (
     get_arxiv_entries,
     get_missing_bib_entries,
     load_attempts,
-    placeholder_key,
     resolve,
     save_attempts,
     sort_by_attempts,
@@ -88,6 +88,44 @@ STEP_INPUTS = {
 }
 
 
+
+
+def preflight() -> list:
+    """Check the things whose absence would otherwise fail deep into a run.
+
+    Cheap, and it turns a bare FileNotFoundError in step 5 into an instruction
+    before step 1. Only reports what is genuinely required -- an unset optional
+    API key is not a problem.
+    """
+    problems = []
+    if not shutil.which("curl"):
+        problems.append("curl is not on PATH. Every HTTP fetch uses it, because "
+                        "Python's TLS fingerprint gets blocked by Scholar.")
+    if not shutil.which("git"):
+        problems.append("git is not on PATH, so step 7 cannot push.")
+    if not os.path.exists(TABLE_PATH):
+        problems.append(f"No publications table: expected "
+                        f"{os.path.basename(CSV_PATH)} or "
+                        f"{os.path.basename(XLSX_PATH)}.")
+    if not os.path.exists(BIB_PATH):
+        problems.append("orig.bib is missing.")
+
+    import rebuild_tex
+    overleaf_problem = rebuild_tex.check_overleaf_present()
+    if overleaf_problem:
+        problems.append(overleaf_problem)
+
+    try:
+        import config
+        if not getattr(config, "SCHOLAR_USER_ID", ""):
+            problems.append("config.SCHOLAR_USER_ID is empty, so step 1 has no "
+                            "profile to fetch.")
+        if not getattr(config, "AUTHOR_NAME", ""):
+            problems.append("config.AUTHOR_NAME is empty; the BST files and "
+                            "main.tex are patched from it.")
+    except Exception as exc:
+        problems.append(f"config.py could not be imported: {exc}")
+    return problems
 
 
 # ── Step 1 ─────────────────────────────────────────────────────────────────────
@@ -539,7 +577,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Update the publications pipeline end-to-end",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Steps auto-skip when their output is already newer than their inputs.\nUse --force to bypass all auto-skip checks.",
+        epilog="""Steps auto-skip when their inputs' contents are unchanged since the
+step last succeeded. Use --force to bypass that.
+
+Companion commands, none needed routinely:
+  python scripts/worklist.py            regenerate WORKLIST.md alone (no network)
+  python scripts/worklist.py --check    exit 1 if anything needs a decision
+  python scripts/dedupe.py --dry-run    find papers listed twice
+  python scripts/refresh_venues.py      refresh venue rankings and metrics
+  python scripts/install_schedule.py    install the weekly local run
+  python init_new_author.py             wipe personal data, for a fork
+""",
     )
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would change without modifying files")
@@ -558,6 +606,16 @@ def main() -> None:
     parser.add_argument("--user", default=None,
                         help="Google Scholar user ID (passed to fetch_citations.py)")
     args = parser.parse_args()
+
+    problems = preflight()
+    if problems:
+        print("Cannot start:")
+        for problem in problems:
+            print(f"  - {problem}")
+        notify.failure("Publications pipeline cannot start.",
+                       "; ".join(p.split(chr(10))[0] for p in problems),
+                       enabled=not args.no_notify)
+        sys.exit(1)
 
     n_added = 0
     n_upgraded = n_appended = n_still_arxiv = 0

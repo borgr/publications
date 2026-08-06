@@ -95,17 +95,12 @@ def title_stem(title):
     return normalize_text(t)
 
 
-def _synthetic_key(title):
-    """Key for a paper that has no BibTeX key yet (step 3 has not resolved it)."""
-    return "~title:" + normalize_title(title)
-
-
 class IdentityStore:
     """Machine-harvested identifiers per paper, persisted to identity.json.
 
-    Keyed by BibTeX key where one exists, and by a synthetic title key until
-    step 3 assigns one. `titles` records every spelling of a title we have seen
-    for the paper, which is what lets a renamed title still resolve.
+    Keyed by BibTeX key. `titles` records every spelling of a title we have seen
+    for the paper, which is what lets a renamed title still resolve; `rekey`
+    moves a record when a key changes.
     """
 
     def __init__(self, records=None):

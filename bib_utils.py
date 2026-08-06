@@ -15,8 +15,6 @@ search on an empty title rather than querying DBLP for a placeholder string.
 import os
 import re
 
-import pandas as pd
-
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # @comment/@string/@preamble are not bibliography records and carry no key.

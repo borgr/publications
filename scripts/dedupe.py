@@ -28,7 +28,7 @@ sys.path.insert(0, ROOT)
 from bib_utils import (_entry_year, choose_published, is_preprint,  # noqa: E402
                        parse_bibtex, publication_rank)
 from identity import (IdentityStore, duplicate_groups_by_identifier,  # noqa: E402
-                      find_duplicate_titles, normalize_title)
+                      find_duplicate_titles)
 from citations_io import read_citation_rows  # noqa: E402
 from identity import join_citations  # noqa: E402
 from table_io import read_table, write_table  # noqa: E402

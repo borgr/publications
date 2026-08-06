@@ -215,5 +215,7 @@ venues:
   blog:
     match:
       - blog post
+      # Scholar reports this outlet both ways round.
+      - coalition blog
     kind: other
     manual: true
