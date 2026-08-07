@@ -52,6 +52,8 @@ def h(tmp_path, monkeypatch):
     calls, notified = [], []
 
     monkeypatch.setattr(update, "preflight", lambda: [])
+    # The real one reaches Overleaf over the network. Two tests below override it.
+    monkeypatch.setattr(update, "check_push_credential", lambda enabled: None)
 
     for name, result in _STEPS.items():
         def recorder(*args, _n=name, _r=result, **kwargs):
@@ -194,12 +196,42 @@ def test_no_notify_silences_the_notification_but_not_the_exit_code(h, monkeypatc
 
 
 def test_a_preflight_problem_stops_before_any_step(h, monkeypatch):
-    monkeypatch.setattr(update, "preflight", lambda: ["orig.bib is missing"])
+    monkeypatch.setattr(update, "preflight",
+                        lambda: ["orig.bib is missing"])
     with pytest.raises(SystemExit) as exc:
         update.main([])
     assert exc.value.code == 1
     assert h.calls == [], f"steps ran despite a preflight problem: {h.calls}"
     assert h.notified
+
+
+@pytest.mark.parametrize("argv, wants_credential", [
+    ([], True),
+    (["--no-push"], False),
+    (["--dry-run"], False),
+    (["--dry-run", "--no-push"], False),
+])
+def test_the_push_credential_is_checked_only_when_there_will_be_a_push(
+        h, monkeypatch, argv, wants_credential):
+    """The check costs a network round trip and reports a problem that does not
+    apply to a run which never pushes."""
+    asked = []
+    monkeypatch.setattr(update, "check_push_credential",
+                        lambda enabled: asked.append(enabled) or None)
+    update.main(argv + ["--no-notify"])
+    assert asked == [wants_credential]
+
+
+def test_a_credential_problem_warns_but_still_runs_every_step(h, monkeypatch):
+    """The reason the check moved out of preflight: a rotated token used to stop
+    the fetch, the resolve and the rebuild as well as the push."""
+    monkeypatch.setattr(update, "check_push_credential",
+                        lambda enabled: "Cannot authenticate to Overleaf")
+    monkeypatch.setattr(update, "step7_push", lambda dry: False)
+    with pytest.raises(SystemExit) as exc:
+        update.main(["--no-notify"])
+    assert exc.value.code == 1, "a run that could not publish must not exit 0"
+    assert h.ran("step1_fetch") and h.ran("step4_build_bib")
 
 
 def test_a_step_that_raises_leaves_the_step_unrecorded(h, monkeypatch):

@@ -3,8 +3,9 @@ name: pipeline
 # Deliberately does NOT scrape Google Scholar. Scholar blocks datacenter IP
 # ranges, so a hosted runner reliably gets a CAPTCHA rather than data -- a
 # scheduled cloud fetch would fail every week and train you to ignore it. The
-# fetch belongs on your own machine (see launchd/ in this repo); CI's job is to
-# prove that the code and the committed data still produce the right output.
+# fetch belongs on your own machine (install it with scripts/install_schedule.py);
+# CI's job is to prove that the code and the committed data still produce the
+# right output.
 #
 # Everything here works in a fork with no secrets configured.
 

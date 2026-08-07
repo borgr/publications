@@ -35,6 +35,7 @@ FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
 import notify
+import overleaf_auth
 from bib_utils import extract_field, parse_bibtex
 from build_bib import simplify_venue
 from citations_io import read_citation_rows
@@ -100,12 +101,37 @@ STEP_INPUTS = {
 
 
 
+def check_push_credential(enabled: bool = True) -> str | None:
+    """Report early that step 7 will not be able to push, without stopping the run.
+
+    Early, because the alternative is finding out after a Scholar fetch and six
+    steps. Not blocking, because the six steps are worth running anyway: they leave
+    papers.csv, citations.csv and the rebuilt CV current on disk and committed
+    locally, and only the Overleaf push is lost. Overleaf tokens get revoked and
+    rotated, and a revoked one that froze the whole pipeline would quietly stop the
+    data tracking reality as well -- a much worse failure than a stale Overleaf.
+
+    Step 7 still fails, notifies and exits non-zero on its own. This only makes the
+    reason visible at the top of the log rather than at the bottom.
+    """
+    if not enabled:
+        return None
+    import rebuild_tex
+    if rebuild_tex.check_overleaf_present():
+        return None  # No submodule; preflight already blocks on that.
+    return overleaf_auth.check_credential(OVERLEAF_DIR)
+
+
 def preflight() -> list:
     """Check the things whose absence would otherwise fail deep into a run.
 
     Cheap, and it turns a bare FileNotFoundError in step 5 into an instruction
     before step 1. Only reports what is genuinely required -- an unset optional
     API key is not a problem.
+
+    Everything here is blocking, and nothing here touches the network. The push
+    credential is checked separately, by `check_push_credential`: it is the one
+    problem that must be reported early without stopping the run.
     """
     problems = []
     if not shutil.which("curl"):
@@ -513,9 +539,15 @@ def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: 
             return False
         print(f"  [{remote}] Committed.")
 
+    # No prompting, ever. This runs from launchd with no terminal attached, where
+    # git's default is to raise a GUI password dialog behind whatever you are
+    # doing and wait -- holding the run lock, so the following week's run is
+    # skipped too. Failing is recoverable; blocking indefinitely is not.
+    git_env = overleaf_auth.noninteractive_env()
+
     def _push() -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", repo_dir, "push", remote],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=git_env)
 
     print(f"  [{remote}] Pushing…", end=" ", flush=True)
     push = _push()
@@ -527,11 +559,11 @@ def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: 
     print("rejected; rebasing onto remote…", end=" ", flush=True)
     pull = subprocess.run(
         ["git", "-C", repo_dir, "pull", "--rebase", "--autostash", remote],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=git_env,
     )
     if pull.returncode != 0:
         print("FAILED")
-        print(f"    pull --rebase failed: {pull.stderr.strip()[:400]}")
+        print(f"    pull --rebase failed: {overleaf_auth.redact(pull.stderr.strip()[:400])}")
         subprocess.run(["git", "-C", repo_dir, "rebase", "--abort"], capture_output=True)
         return False
 
@@ -540,7 +572,7 @@ def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: 
         print("ok (after rebase)")
         return True
     print("FAILED")
-    print(f"    {push.stderr.strip()[:400]}")
+    print(f"    {overleaf_auth.redact(push.stderr.strip()[:400])}")
     return False
 
 
@@ -629,6 +661,11 @@ Companion commands, none needed routinely:
                        "; ".join(p.split(chr(10))[0] for p in problems),
                        enabled=not args.no_notify)
         sys.exit(1)
+
+    push_problem = check_push_credential(not (args.no_push or args.dry_run))
+    if push_problem:
+        print(f"Warning: {push_problem}\n")
+        sys.stdout.flush()
 
     n_added = 0
     n_upgraded = n_appended = n_still_arxiv = 0

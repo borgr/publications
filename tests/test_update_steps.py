@@ -54,6 +54,9 @@ def healthy(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "BIB_PATH", str(tmp_path / "orig.bib"))
     monkeypatch.setattr(update.shutil, "which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(rebuild_tex, "check_overleaf_present", lambda: None)
+    # Stubbed because the real one makes a network request to Overleaf; there is a
+    # test below for what preflight does when it comes back with a problem.
+    monkeypatch.setattr(update.overleaf_auth, "check_credential", lambda _dir: None)
     monkeypatch.setattr(config, "SCHOLAR_USER_ID", "abc123", raising=False)
     monkeypatch.setattr(config, "AUTHOR_NAME", "A. Author", raising=False)
     return tmp_path
@@ -86,6 +89,49 @@ def test_a_missing_table_is_reported(healthy, monkeypatch):
 def test_a_missing_bib_is_reported(healthy, monkeypatch):
     monkeypatch.setattr(update, "BIB_PATH", str(healthy / "gone.bib"))
     assert any("orig.bib is missing" in p for p in update.preflight())
+
+
+def test_a_missing_overleaf_credential_is_reported(healthy, monkeypatch):
+    """The check that did not exist. Step 7 pushes to Overleaf, and every other
+    thing it needs was checked before step 1 except the ability to do that -- so a
+    run with no stored token did a Scholar fetch and six steps first, then failed.
+    """
+    monkeypatch.setattr(update.overleaf_auth, "check_credential",
+                        lambda _dir: "Cannot authenticate to Overleaf")
+    assert "Cannot authenticate" in (update.check_push_credential() or "")
+
+
+def test_a_missing_credential_does_not_block_the_run(healthy, monkeypatch):
+    """It is reported and the run continues. The six steps still leave the data and
+    the CV current on disk; freezing the pipeline over a rotated token would stop
+    the data tracking reality too, which is the worse of the two failures."""
+    monkeypatch.setattr(update.overleaf_auth, "check_credential",
+                        lambda _dir: "Cannot authenticate to Overleaf")
+    assert update.preflight() == []
+
+
+def test_the_credential_is_not_checked_when_nothing_will_be_pushed(healthy, monkeypatch):
+    """`--no-push` and `--dry-run` need no credential, so the network round trip
+    and the warning are both pointless there."""
+    called = []
+    monkeypatch.setattr(update.overleaf_auth, "check_credential",
+                        lambda _dir: called.append(1) or "Cannot authenticate")
+    assert update.check_push_credential(False) is None
+    assert not called
+
+
+def test_the_credential_is_not_checked_when_the_submodule_is_absent(healthy, monkeypatch):
+    """Two reports of one problem send the reader to the wrong instruction: there
+    is no point storing a token for a submodule that is not there."""
+    import rebuild_tex
+    monkeypatch.setattr(rebuild_tex, "check_overleaf_present",
+                        lambda: "overleaf/ is empty")
+    called = []
+    monkeypatch.setattr(update.overleaf_auth, "check_credential",
+                        lambda _dir: called.append(1) or "credential problem")
+    assert update.check_push_credential() is None
+    assert update.preflight() == ["overleaf/ is empty"]
+    assert not called, "checked the credential for a submodule that is not there"
 
 
 def test_an_unpopulated_overleaf_submodule_is_reported(healthy, monkeypatch):
