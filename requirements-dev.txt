@@ -1,5 +1,6 @@
 -r requirements.txt
 pytest>=7.4
+pytest-cov>=4.1
 # Bounded to one minor series, unlike the runtime pins. ruff adds rules in every
 # release, so an open range would turn an unrelated commit red over a lint rule
 # nobody in this repo chose.

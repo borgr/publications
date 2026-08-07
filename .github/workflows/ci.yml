@@ -70,7 +70,17 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Tests
+        if: matrix.python-version != '3.12'
         run: python -m pytest tests/ -q
+
+      - name: Tests, with the coverage floor
+        # Measured on one interpreter only. The floor is a property of the test
+        # suite, not of the Python version, and enforcing it three times means a
+        # version-gated branch can fail the gate on 3.10 while passing on 3.13 --
+        # three red jobs for one missing test, and no way to tell that from a real
+        # incompatibility. The thresholds and exclusions live in pyproject.toml.
+        if: matrix.python-version == '3.12'
+        run: python -m pytest tests/ -q --cov
 
   floor:
     # Does the lowest version each pin claims to accept actually work?

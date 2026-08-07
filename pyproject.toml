@@ -57,3 +57,26 @@ known-first-party = [
 testpaths = ["tests"]
 # Import mode and rootdir, so `pytest` works from the root with no PYTHONPATH.
 pythonpath = ["."]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "overleaf/*",   # a submodule: someone else's LaTeX project
+    # The figure scripts. Run by hand when a talk or a paper needs a plot, never
+    # by update.py and never by CI, and their output is judged by looking at it.
+    # They are genuinely untested, and counting their ~370 statements in the gate
+    # would force it down to a number too low to catch a regression in the code
+    # that does run unattended every week. Excluded so the gate can be strict
+    # about the pipeline, not to make the figure quoted here look better.
+    "papers_fig.py",
+    "papers_graph.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+# The pipeline runs unattended and writes to the CV, so the point of a floor is
+# that a step cannot be added, or a tested one gutted, without either tests or a
+# deliberate decision to lower this line. Set a little under where the suite
+# stands, so ordinary work has room and only a real drop trips it.
+fail_under = 92
