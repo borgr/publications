@@ -269,3 +269,101 @@ def test_find_field_span_balances_nested_braces():
     start, end, delim = find_field_span(content, "title")
     assert content[start:end] == "A {Nested} Title"
     assert delim == '{'
+
+
+# ── truncated and malformed field values ─────────────────────────────────────
+#
+# Both readers are given whatever a remote source returned. A truncated response
+# is the ordinary failure mode of an HTTP fetch, and the only safe answer to one
+# is "no value" -- a partial title would be written to the CV as if it were the
+# paper's name.
+
+@pytest.mark.parametrize("content", [
+    'title = ',                 # the response ended mid-field
+    'title = {unbalanced',       # a braced value with no closing brace
+    'title = "no closing quote',  # a quoted value with no closing quote
+])
+def test_a_truncated_field_reads_as_absent(content):
+    assert extract_field(content, "title") == ""
+    assert find_field_span(content, "title") is None
+
+
+@pytest.mark.parametrize("reader, expected", [
+    (extract_field, r'A \" quote'),
+    (lambda c, f: c[slice(*find_field_span(c, f)[:2])], r'A \" quote'),
+])
+def test_an_escaped_quote_does_not_end_a_quoted_value(reader, expected):
+    """Otherwise the value stops at the escape and the rest of the entry is read
+    as if it were fields -- and for find_field_span, an edit lands mid-title."""
+    assert reader(r'title = "A \" quote", year = 2024', "title") == expected
+
+
+def test_a_commented_out_entry_is_not_a_publication():
+    """@comment is how an entry gets shelved without deleting it, so its contents
+    parse perfectly well as a record. Emitting it would put a paper the author
+    removed back on the CV."""
+    text = ('@comment{shelved2024, title = {A Draft, Not Submitted}}\n\n'
+            + BRACE_STYLE)
+    assert [e["item_name"] for e in parse_bibtex(text)] == ["example2024key"]
+
+
+# ── entry types the ranking rules do not name ────────────────────────────────
+
+def test_an_unnamed_entry_type_ranks_between_published_and_preprint():
+    """@phdthesis, @mastersthesis, @online: real documents, but not the venue a
+    published paper has. Ranking them as preprints would let an arXiv copy of a
+    thesis win; ranking them as published would beat the paper it became."""
+    thesis = parse_bibtex('@phdthesis{a, title={T}}')[0]
+    preprint = parse_bibtex('@misc{b, title={T}}')[0]
+    published = parse_bibtex('@inproceedings{c, title={T}, booktitle={ACL}}')[0]
+    assert (publication_rank(preprint) < publication_rank(thesis)
+            < publication_rank(published))
+
+
+def test_an_unnamed_type_is_a_preprint_only_if_it_says_so():
+    assert is_preprint(parse_bibtex('@phdthesis{a, title={T}, eprint={2401.1}}')[0])
+    assert not is_preprint(parse_bibtex('@phdthesis{a, title={T}}')[0])
+
+
+# ── read_df ──────────────────────────────────────────────────────────────────
+
+import bib_utils
+
+
+@pytest.fixture
+def table_problems(monkeypatch):
+    """Drive read_df with a stubbed table, and clear the once-per-run memory.
+
+    The set is module state that outlives a single call, which is the whole point
+    of it, so a test that did not reset it would depend on test order.
+    """
+    import table_io
+
+    monkeypatch.setattr(bib_utils, "_reported_table_problems", set())
+
+    def _run(problems, df="the frame"):
+        monkeypatch.setattr(table_io, "read_table", lambda: df)
+        monkeypatch.setattr(table_io, "validate", lambda _df: problems)
+        return bib_utils.read_df()
+    return _run
+
+
+def test_read_df_returns_the_table_it_read(table_problems):
+    assert table_problems([]) == "the frame"
+
+
+def test_a_table_problem_is_reported_not_raised(table_problems, capsys):
+    """An untidy table still has to build a CV; the problems go to WORKLIST.md."""
+    df = table_problems(["two rows share a bib key"])
+    assert df == "the frame"
+    assert "two rows share a bib key" in capsys.readouterr().out
+
+
+def test_the_same_problem_is_reported_once_per_run(table_problems, capsys):
+    """Several modules call read_df in one run, and a warning printed three times
+    reads as three problems."""
+    table_problems(["two rows share a bib key"])
+    table_problems(["two rows share a bib key", "row 12 has no year"])
+    out = capsys.readouterr().out
+    assert out.count("two rows share a bib key") == 1
+    assert "row 12 has no year" in out

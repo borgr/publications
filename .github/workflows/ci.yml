@@ -71,7 +71,11 @@ jobs:
 
       - name: Tests
         if: matrix.python-version != '3.12'
-        run: python -m pytest tests/ -q
+        # -rs: the tests that assert against the real Overleaf project skip here,
+        # because this job checks out without the submodule. That is intended, but
+        # a bare "730 passed" reads as though they ran. Print the reasons so a
+        # green run says which checks it did not perform.
+        run: python -m pytest tests/ -q -rs
 
       - name: Tests, with the coverage floor
         # Measured on one interpreter only. The floor is a property of the test
@@ -80,7 +84,7 @@ jobs:
         # three red jobs for one missing test, and no way to tell that from a real
         # incompatibility. The thresholds and exclusions live in pyproject.toml.
         if: matrix.python-version == '3.12'
-        run: python -m pytest tests/ -q --cov
+        run: python -m pytest tests/ -q -rs --cov
 
   floor:
     # Does the lowest version each pin claims to accept actually work?
