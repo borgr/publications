@@ -55,6 +55,7 @@ so a fresh clone behaves correctly and a no-op rewrite does not cascade.
 python scripts/worklist.py          # regenerate WORKLIST.md alone (no network)
 python scripts/worklist.py --check  # exit 1 if anything needs a decision
 python scripts/dedupe.py --dry-run  # find papers listed twice, keep the published one
+python scripts/prune_bib.py         # list orig.bib entries nothing refers to (--apply to remove)
 python scripts/refresh_venues.py    # refresh venue rankings and impact metrics
 python -m pytest tests/ -q          # the test suite
 ```
@@ -64,6 +65,7 @@ python -m pytest tests/ -q          # the test suite
 ```bash
 python scripts/install_schedule.py       # weekly local run (macOS launchd)
 python scripts/install_schedule.py --show  # print the plist / cron line instead
+python scripts/install_overleaf_credential.py  # store the Overleaf git token, so step 7 can push
 python scripts/migrate_to_csv.py         # only if you still have the .xlsx
 python init_new_author.py                # wipe personal data, for a fork
 ```
@@ -117,11 +119,49 @@ Split deliberately, because Scholar blocks datacenter IP ranges — a hosted run
 gets a CAPTCHA, not data:
 
 - **Locally**, weekly, via `scripts/install_schedule.py`. This is the one that
-  fetches from Scholar.
+  fetches from Scholar. It also needs the Overleaf token stored once, with
+  `scripts/install_overleaf_credential.py` — see below.
 - **[GitHub Actions](.github/workflows/ci.yml)** covers what does not need
   Scholar: the test suite on two Python versions, a rebuild from committed data,
   a determinism check, and a failure if the table has duplicate rows or an
   ambiguous citation join. No secrets, works in a fork.
+
+### Letting the local run push to Overleaf
+
+Step 7 pushes with plain `git push`, so git has to be able to authenticate on its
+own — there is nobody at the keyboard at 08:37 on a Monday. Run this once, and
+again whenever you rotate the token:
+
+```bash
+python scripts/install_overleaf_credential.py
+```
+
+It takes the URL from the first of three places that has one:
+
+1. `~/.config/publications/overleaf_git_url`, a one-line hand-over file. Use this
+   when the person holding the token and the person running the installer are not
+   the same, or not at the same keyboard. It is read, transferred into the
+   credential store, verified, and then **deleted**; a token it could not
+   authenticate with is left in place so you can correct it. It lives outside the
+   repository deliberately, and the installer refuses to read a path inside the
+   repository rather than risk `git add -A` committing a token to a public remote.
+2. `$OVERLEAF_GIT_URL`, if you have already exported it.
+3. A hidden prompt.
+
+From there it goes to git's own credential store — the macOS keychain, via
+`git credential approve` — and a real request proves it works. The token is never
+written into the working tree, never put on a command line, and never printed;
+storing it in the submodule's remote URL or in `.git/config` would leave it in
+plaintext, and a dotfile in the tree is one `git add -A` away from a public repo.
+
+Until you do this, `update.py` prints the reason it will not be able to push
+*before* step 1 rather than after a full Scholar fetch, and then **runs anyway**.
+Only the push is lost: `papers.csv`, `citations.csv` and the rebuilt CV all end up
+current on disk and committed locally, and step 7 fails, notifies and exits
+non-zero on its own. Tokens get revoked and rotated, and one that froze the whole
+pipeline would quietly stop the data tracking reality as well — a worse failure
+than a stale Overleaf. `GIT_TERMINAL_PROMPT=0` keeps a missing credential from
+stalling on a password prompt an unattended run has no way to answer.
 
 ### Letting CI see your Overleaf project (optional)
 
@@ -197,10 +237,10 @@ browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
 identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
 `WORKLIST.md`, `overleaf/Wzmn.bib`.
 
-`enhanced.bib` is **legacy — do not read.** It is an old snapshot of
-`build_bib.py`'s output from when it wrote there instead of
-`overleaf/Wzmn.bib`. Nothing regenerates it, so it drifts further behind every
-run. To use the bibliography from outside this repo, read `orig.bib`.
+`Contributions_table.xlsx` is **legacy**. `papers.csv` is the source of truth;
+`table_io.py` falls back to the xlsx only so a fork that has not run
+`scripts/migrate_to_csv.py` still works. Nothing writes it, so it drifts behind
+every run — read `papers.csv`.
 
 ### Code
 
@@ -218,7 +258,7 @@ run. To use the bibliography from outside this repo, read `orig.bib`.
 | `venues.py` | Loads `venues.yaml`. |
 | `pipeline_state.py` | Content-hash step skipping. |
 | `notify.py` | Failure notification (macOS Notification Center, Actions annotation). |
-| `papers_fig.py`, `papers_graph.py` | Standalone figures. Not part of the pipeline; needs `requirements-figures.txt`. |
+| `scripts/papers_fig.py`, `scripts/papers_graph.py` | Standalone figures. Not part of the pipeline; needs `requirements-figures.txt`. |
 
 ## How papers are matched across sources
 
@@ -257,6 +297,29 @@ step 3 (never downgrade), by the build (emit the version of record), and by
 
 Duplicates are found by **identifier** as well as by title, which catches the
 retitled ones no title comparison can.
+
+A mis-resolution is a different problem from a duplicate, and is never fixed
+automatically: a duplicate is provable and safe to drop, while an entry pointing at
+the *wrong* paper has to be looked at. The cheap test is whether the entry credits
+the author at all — `bib_utils.lists_author` — which is what step 3 applies to
+every candidate and what `tests/test_author_on_every_paper.py` asserts over the
+whole table. Without it the resolver accepted an invited talk by one of a Nature
+paper's twenty co-authors as that paper's published version, on a title similarity
+of 0.86, and the CV printed it.
+
+## Pruning orig.bib
+
+`orig.bib` accumulates: a paper's arXiv entry stays behind when step 3 moves its row
+to the published key. Sixty-nine of a hundred and seventy-eight entries were
+unreachable that way. None of it reaches the CV — `Wzmn.bib` is built from the
+intersection of the table and the bibliography — so this is about being able to read
+the file and see a real diff in it.
+
+`scripts/prune_bib.py` reports them, and removes them with `--apply`. Three things
+protect an entry, and any one is enough: a table row's `Bib` key, a `\nocite` in
+`main.tex` (including a commented-out one), or a Scholar ID bound to it in
+`identity.json`. It also strips `pretitle` fields committed back into the source,
+which every build regenerates from `papers.csv` anyway. Git history is the backup.
 
 ## Venues
 
