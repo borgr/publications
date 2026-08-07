@@ -53,8 +53,10 @@ smoothing_factor = 5  # Higher values = more smoothing
 # Read the XLS file
 
 
-df = pd.read_excel(
-    os.path.join(os.path.dirname(__file__), 'Contributions_table.xlsx'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# papers.csv, not Contributions_table.xlsx: the xlsx is a legacy fallback that
+# nothing writes any more, so it plots whatever the table said before migration.
+df = pd.read_csv(os.path.join(ROOT, 'papers.csv'))
 lines = ['Resources', 'The Science of\nDeep Learning', 'Methods', 'Dataset', 'Training',
          'Evaluation', r'Shared-task\effort', 'Language&Cognition', 'Open',
          'Meta-science', 'Enabling Low Budget Research', 'Efficiency', 'NLP']

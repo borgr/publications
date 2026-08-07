@@ -48,9 +48,8 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "bib_utils", "build_bib", "citations_io", "config", "fetch_citations",
-    "identity", "init_new_author", "notify", "papers_fig", "papers_graph",
-    "pipeline_state", "rebuild_tex", "resolve_arxiv", "table_io", "update",
-    "venues",
+    "identity", "init_new_author", "notify", "pipeline_state", "rebuild_tex",
+    "resolve_arxiv", "table_io", "update", "venues",
 ]
 
 [tool.pytest.ini_options]
@@ -69,8 +68,8 @@ omit = [
     # would force it down to a number too low to catch a regression in the code
     # that does run unattended every week. Excluded so the gate can be strict
     # about the pipeline, not to make the figure quoted here look better.
-    "papers_fig.py",
-    "papers_graph.py",
+    "scripts/papers_fig.py",
+    "scripts/papers_graph.py",
 ]
 
 [tool.coverage.report]

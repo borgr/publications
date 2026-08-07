@@ -458,8 +458,10 @@ def rename(line):
     return RENAME_DICT.get(line, line)
 
 
-df = pd.read_excel(
-    os.path.join(os.path.dirname(__file__), 'Contributions_table.xlsx'))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# papers.csv, not Contributions_table.xlsx: the xlsx is a legacy fallback that
+# nothing writes any more, so it plots whatever the table said before migration.
+df = pd.read_csv(os.path.join(ROOT, 'papers.csv'))
 all_lines = ["NLP", "Small Models", "Debating", "Recycling", "Scaling Laws", "Human-Model Interaction", "Efficient Pretraining Research", "Resources", "The Science of Deep Learning",
              "Methods", "Dataset", "Training", "Evaluation", r"Shared-task\effort", "Language&Cognition", "Open", "Meta-science", "Enabling Low Budget Research", "Efficiency"]
 

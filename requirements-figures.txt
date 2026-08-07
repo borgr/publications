@@ -1,4 +1,4 @@
-# Only for the standalone figure scripts (papers_fig.py, papers_graph.py).
+# Only for the standalone figure scripts (scripts/papers_fig.py, scripts/papers_graph.py).
 # These are not part of the update pipeline, and their dependencies are heavy
 # enough that requiring them for a bibliography rebuild is not worth it.
 -r requirements.txt

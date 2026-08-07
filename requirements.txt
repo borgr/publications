@@ -2,7 +2,7 @@
 # that only rebuilds the bibliography -- installs in seconds.
 #
 #   requirements-dev.txt      to run the tests
-#   requirements-figures.txt  to run papers_fig.py / papers_graph.py
+#   requirements-figures.txt  to run scripts/papers_fig.py / scripts/papers_graph.py
 #
 # `scholarly` used to be here for citation_count.py, which nothing imported;
 # the Scholar scrape goes through curl instead, to avoid Python's TLS
