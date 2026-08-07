@@ -127,12 +127,12 @@ def test_an_empty_venue_resolves_to_nothing_quietly():
 def test_a_paper_gets_its_citation_count_and_tags():
     df = table({"Name": "Paper One", "Bib": "p1", "Venue": "ACL 2024", "Open": 1})
     parsed = parse_bibtex(bib(("p1", "")))
-    out, cats, seen, under_review, non_papers = build_bib._process_entries(
+    out, cats, seen, arxiv_only, non_paper_rows = build_bib._process_entries(
         parsed, df, {"Paper One": 12})
     assert "citations={12}" in out
     assert "pretitle={\\COL}" in out
     assert cats.conferences == ["p1"] and seen == 1
-    assert (under_review, non_papers) == (0, 0)
+    assert (arxiv_only, non_paper_rows) == (0, 0)
 
 
 def test_a_matched_paper_with_no_count_renders_zero():
@@ -170,11 +170,11 @@ def test_a_non_paper_is_passed_through_without_citations():
     assert cats.conferences == [] and cats.drafts == []
 
 
-def test_a_preprint_counts_as_under_review_and_files_as_a_draft():
+def test_a_preprint_counts_as_arxiv_only_and_files_as_a_draft():
     df = table({"Name": "Paper One", "Bib": "p1", "Venue": "arXiv preprint"})
-    _, cats, _, under_review, _ = build_bib._process_entries(
+    _, cats, _, arxiv_only, _ = build_bib._process_entries(
         parse_bibtex(bib(("p1", ""))), df, {})
-    assert cats.drafts == ["p1"] and under_review == 1
+    assert cats.drafts == ["p1"] and arxiv_only == 1
 
 
 def test_duplicate_table_rows_for_one_key_warn_and_use_the_first(capsys):

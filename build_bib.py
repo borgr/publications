@@ -246,11 +246,11 @@ def _categorize(venue_simple, is_arxiv, is_review, is_workshop):
 def _process_entries(parsed, df, name2cite, suppressed=()):
     """Build wzmn.bib text and categorise each paper.
 
-    Returns (bib_out, BibCategories, bibs_seen, under_review_count, non_paper_count).
+    Returns (bib_out, BibCategories, bibs_seen, arxiv_only_count, non_paper_count).
     """
     bib_parts = []
     cats = {field: [] for field in BibCategories._fields}
-    bibs_seen = under_review = non_papers = 0
+    bibs_seen = arxiv_only = non_paper_rows = 0
 
     for dic in parsed:
         if dic["item_name"] in suppressed:
@@ -269,7 +269,7 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
         bibs_seen += 1
 
         if not row["Paper"].item():
-            non_papers += 1
+            non_paper_rows += 1
             bib_parts.append(beg + rest)
             continue
 
@@ -285,6 +285,13 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
         # unmatched one -- Scholar simply omits the cell for uncited papers.
         raw_count = name2cite.get(row["Name"].item())
         cite_count = str(raw_count if raw_count is not None else 0).replace("*", "").strip()
+        # Each injected field is prepended with its own leading newline, so they
+        # separate from each other but the last one lands on the same line as the
+        # entry's first real field: `pretitle={},author = {...}`. Valid BibTeX, but
+        # it defeats every line-anchored `^\s*author\s*=` in a reader's grep -- one
+        # audit of this file reported 49 entries as having no author on that basis.
+        if not rest.startswith("\n"):
+            rest = "\n    " + rest.lstrip()
         rest = "\n    pretitle={" + tags + "}," + rest
         rest = "\n    citations={" + cite_count + "}," + rest
 
@@ -305,7 +312,7 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
             category = "drafts"
         cats[category].append(row_bib)
         if is_arxiv:
-            under_review += 1
+            arxiv_only += 1
 
         bib_parts.append(beg + rest)
 
@@ -313,7 +320,7 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
     # No global text rewriting here. A previous `{'` -> `{\\'` replace was meant to
     # escape an accent but only ever matched `{'}s` (ACL Anthology's export of an
     # apostrophe, valid BibTeX as-is) and rewrote it to `\\` -- a LaTeX line break.
-    return bib_out, BibCategories(**cats), bibs_seen, under_review, non_papers
+    return bib_out, BibCategories(**cats), bibs_seen, arxiv_only, non_paper_rows
 
 
 def _check_coverage(parsed, df, bibs_seen):
@@ -475,7 +482,7 @@ def main():
         print(f"Duplicate paper: emitting {winner!r} (publication rank {rank}) and "
               f"omitting {losers} from the CV. Run scripts/dedupe.py to fix the table.")
 
-    bib_out, cats, bibs_seen, under_review, non_papers = _process_entries(
+    bib_out, cats, bibs_seen, arxiv_only, non_paper_rows = _process_entries(
         parsed, df, name2cite, suppressed=suppressed)
 
     enhanced_path = os.path.join(FILE_DIR, "overleaf", "Wzmn.bib")
@@ -484,7 +491,12 @@ def main():
 
     _check_coverage(parsed, df, bibs_seen)
 
-    print(f"Skipped {under_review} under-review and {non_papers} non-papers")
+    # Not "skipped", which is what this said for years: both counts are emitted.
+    # The arXiv ones go in the ArXiv Articles section and the Paper=0 rows are
+    # written without venue enrichment, so a reader chasing a missing paper was
+    # being told it had been left out when it was in the file all along.
+    print(f"Emitted {arxiv_only} preprint(s) with no published version and "
+          f"{non_paper_rows} row(s) marked as not a paper")
     print(f"Bib exported to {os.path.abspath(enhanced_path)}")
     print("All venues: " + str([x for x in df["Venue"].apply(simplify_venue).unique()
                                   if x and "xiv" not in x and "review" not in x]))
