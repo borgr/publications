@@ -28,7 +28,7 @@ jobs:
     # of the year that needed it.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -55,7 +55,7 @@ jobs:
         # the walrus in pipeline_state); the ceiling catches upcoming breakage.
         python-version: ["3.10", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The Overleaf submodule is a private remote; CI neither needs nor can
           # reach it, and the offline rebuild is checked against a temp copy.
@@ -96,7 +96,7 @@ jobs:
     # mistake. This resolves every `>=` to `==` and runs the suite against it.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -123,7 +123,7 @@ jobs:
     # deterministic -- the bibliography must not change just because it ran again.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: false
 
@@ -279,7 +279,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: false
 
