@@ -7,6 +7,7 @@ the run reported success and pushed.
 """
 
 import os
+import re
 import sys
 
 import pytest
@@ -127,6 +128,15 @@ def test_a_missing_conferences_marker_is_an_error(stats):
     assert any("conferences" in p for p in problems)
 
 
+def test_a_marker_with_no_nocite_after_it_is_an_error(stats):
+    """The marker survived an Overleaf edit but the list under it did not, so
+    there is nothing to replace and the section would come out empty."""
+    tex = TEX.replace("% Conferences:\n\\nocite{old_conference}\n", "% Conferences:\n")
+    out, problems = update_tex(tex, CATS)
+    assert any("conferences" in p and "no uncommented" in p for p in problems)
+    assert "\\nocite{c1}" not in out
+
+
 def test_a_chapter_with_no_nocite_is_an_error(stats):
     tex = TEX.replace("\\chapter*{Workshop Papers}\n\\nocite{old_workshop}",
                       "\\chapter*{Workshop Papers}")
@@ -203,6 +213,22 @@ def test_the_live_document_still_has_every_anchor():
         assert needle in tex, f"anchor missing from the live main.tex: {anchor!r}"
     assert rebuild_tex._STATS_RE.search(tex), "stats block shape changed"
     assert rebuild_tex._AUTHOR_LINE_RE.search(tex), "author line shape changed"
+
+    # Bounding the comment-anchored search to its own block must not move where
+    # it lands in the real document -- the list it edits has to be the one that
+    # sits under the marker, not merely the next one in the file.
+    for field, kind, anchor in rebuild_tex._SECTIONS:
+        if kind != "comment":
+            continue
+        out, problem = rebuild_tex._replace_nocite_after_comment(
+            tex, anchor, ["sentinel_key"])
+        assert problem is None, problem
+        edited_at = out.index(r"\nocite{sentinel_key}")
+        block_end = re.search(r'^(\\putbib|\\chapter\*)', tex[tex.find(anchor):],
+                              re.MULTILINE)
+        assert edited_at < tex.find(anchor) + block_end.start(), (
+            f"{field}: the marker's own list is missing, so the edit landed in "
+            f"the next section")
 
 
 def test_nocite_formatting():
@@ -354,3 +380,141 @@ def test_renaming_to_the_same_name_is_a_no_op(bst_with_output):
     rebuild_tex.patch_bst_author("Leshem Choshen")
     assert (bst_with_output / "planyr-rev.bst").read_text(encoding="utf-8") \
         == BST_WITH_OUTPUT
+
+
+@pytest.mark.parametrize("old, new", [
+    ("Aristotle", "Aristotle Onassis"),   # a middle or last name added
+    ("Leshem Choshen", "Ada Choshen"),    # the same surname as the previous author
+    ("Ada Lovelace", "Ada B. Lovelace"),  # an initial added
+])
+def test_a_name_the_new_one_contains_is_not_reported_as_a_straggler(
+        tmp_path, monkeypatch, old, new):
+    """The rename succeeded; what is left in the file *is* the new name.
+
+    Reporting it said all three styles would bold the wrong name, on a file that
+    had been renamed completely -- and sharing a surname with the previous author
+    is enough to hit it, which is the ordinary case for a fork.
+    """
+    for name in rebuild_tex._BST_FILES:
+        (tmp_path / name).write_text(
+            f'{{ t "{old}" = {{ bold }} if$ }}\n{{ purify$ "{old}" = }}\n',
+            encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "OVERLEAF_DIR", str(tmp_path))
+
+    assert rebuild_tex.patch_bst_author(new) == []
+    assert f'"{new}"' in (tmp_path / "planyr.bst").read_text(encoding="utf-8")
+
+
+# ── profile_stats.json, which a fetch can leave absent or half-written ───────
+
+def test_absent_stats_are_not_a_problem(tmp_path, monkeypatch):
+    """Nothing has been fetched yet -- there is no number to write, which is not
+    the same as failing to write one."""
+    monkeypatch.setattr(rebuild_tex, "STATS_PATH", str(tmp_path / "gone.json"))
+    monkeypatch.setattr(rebuild_tex.config, "AUTHOR_NAME", "Leshem Choshen")
+    out, problems = update_tex(TEX, CATS)
+    assert problems == []
+    assert "Citations\t100" in out, "the existing totals must be left alone"
+
+
+@pytest.mark.parametrize("content, expected", [
+    ("{not json", "could not read"),
+    ('{"h_index": 39}', "no 'citations'"),
+    ('{"citations": 6286}', "no 'citations'"),
+])
+def test_unusable_stats_are_reported_rather_than_written(
+        tmp_path, monkeypatch, content, expected):
+    """A truncated fetch is the ordinary failure. Writing part of it would put a
+    wrong citation total on the CV; skipping it silently would freeze the total
+    while the run reported success."""
+    path = tmp_path / "profile_stats.json"
+    path.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "STATS_PATH", str(path))
+    monkeypatch.setattr(rebuild_tex.config, "AUTHOR_NAME", "Leshem Choshen")
+    out, problems = update_tex(TEX, CATS)
+    assert any(expected in p for p in problems), problems
+    assert "Citations\t100" in out
+
+
+def test_unchanged_stats_say_so(stats, capsys):
+    """Distinguishes "already current" from "the anchor was not found"."""
+    once, _ = update_tex(TEX, CATS)
+    update_tex(once, CATS)
+    assert "already current" in capsys.readouterr().out
+
+
+# ── the missing submodule, which is a fork's first experience of this repo ────
+
+def test_a_populated_overleaf_is_not_a_problem(tmp_path, monkeypatch):
+    monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(tmp_path / "main.tex"))
+    (tmp_path / "main.tex").write_text(TEX, encoding="utf-8")
+    assert rebuild_tex.check_overleaf_present() == ""
+
+
+@pytest.mark.parametrize("make_dir", [False, True], ids=["absent", "empty"])
+def test_an_unchecked_out_submodule_says_how_to_check_it_out(
+        tmp_path, monkeypatch, make_dir):
+    """This step died five steps into a run on a bare FileNotFoundError."""
+    overleaf = tmp_path / "overleaf"
+    if make_dir:
+        overleaf.mkdir()
+    monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(overleaf / "main.tex"))
+    monkeypatch.setattr(rebuild_tex, "OVERLEAF_DIR", str(overleaf))
+    problem = rebuild_tex.check_overleaf_present()
+    assert "git submodule update --init" in problem
+    assert "init_new_author.py" in problem, "a fork cannot use the author's project"
+
+
+def test_an_overleaf_without_main_tex_names_a_template_that_exists(
+        tmp_path, monkeypatch):
+    """A fresh Overleaf project has files but no CV. Naming the submodule's own
+    template unconditionally gave a fork a cp command with no source."""
+    overleaf = tmp_path / "overleaf"
+    overleaf.mkdir()
+    (overleaf / "references.bib").write_text("", encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(overleaf / "main.tex"))
+    monkeypatch.setattr(rebuild_tex, "OVERLEAF_DIR", str(overleaf))
+
+    problem = rebuild_tex.check_overleaf_present()
+    named = problem.rsplit(" ", 2)[-2]
+    assert os.path.exists(named), f"the suggested template does not exist: {named}"
+
+    (overleaf / "template.tex").write_text("", encoding="utf-8")
+    assert "template.tex" in rebuild_tex.check_overleaf_present()
+
+
+def test_main_refuses_to_run_without_a_document(tmp_path, monkeypatch):
+    monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(tmp_path / "main.tex"))
+    monkeypatch.setattr(rebuild_tex, "OVERLEAF_DIR", str(tmp_path / "overleaf"))
+    with pytest.raises(FileNotFoundError, match="submodule"):
+        rebuild_tex.main(CATS)
+
+
+def test_main_warns_about_a_bst_problem_but_still_writes(tmp_path, monkeypatch,
+                                                        stats, capsys):
+    """The CV compiles with the wrong name bolded, so this cannot be fatal -- but
+    the rendered PDF is the only other place it shows."""
+    tex_path = tmp_path / "main.tex"
+    tex_path.write_text(TEX, encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(tex_path))
+    monkeypatch.setattr(rebuild_tex, "patch_bst_author",
+                        lambda *a, **k: ["planyr.bst names somebody else"])
+    rebuild_tex.main(CATS)
+    assert "planyr.bst names somebody else" in capsys.readouterr().out
+    assert "\\nocite{j1,j2}" in tex_path.read_text(encoding="utf-8")
+
+
+def test_main_builds_the_bibliography_when_it_is_not_given_one(
+        tmp_path, monkeypatch, stats):
+    """update.py passes the categories it already has; a direct `python
+    rebuild_tex.py` has none and must not rebuild main.tex against nothing."""
+    tex_path = tmp_path / "main.tex"
+    tex_path.write_text(TEX, encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "TEX_PATH", str(tex_path))
+    monkeypatch.setattr(rebuild_tex, "patch_bst_author", lambda *a, **k: [])
+    called = []
+    monkeypatch.setattr(rebuild_tex.build_bib, "main",
+                        lambda: called.append(True) or CATS)
+    rebuild_tex.main()
+    assert called == [True]
+    assert "\\nocite{j1,j2}" in tex_path.read_text(encoding="utf-8")

@@ -77,7 +77,12 @@ def _replace_nocite_after_comment(tex, comment_text, new_keys):
                      f"cannot be updated")
 
     after = tex[comment_pos + len(comment_text):]
-    m = _NOCITE_RE.search(after)
+    # Bounded to the block this marker labels, like the chapter version is bounded
+    # by \putbib. Unbounded, a marker whose own \nocite{} had been deleted in the
+    # Overleaf editor matched the *next* section's list instead and wrote this
+    # section's papers into it -- silently, since a replacement did happen.
+    bound = re.search(r'^(\\putbib|\\chapter\*)', after, re.MULTILINE)
+    m = _NOCITE_RE.search(after[:bound.start()] if bound else after)
     if not m:
         return tex, f"no uncommented \\nocite{{}} after {comment_text!r}"
 
@@ -149,13 +154,21 @@ def patch_bst_author(author_name: str | None = None) -> list:
         # Any trace of a previous author's name -- full, or first/last as a whole
         # word. `iclr-based.bst` carries a `format.name.bold` that names the parts
         # as bare identifiers, which no quoted-string replacement reaches.
+        #
+        # Only the name parts are checked. The replacement above is global, so a
+        # surviving *whole* old name means the new name contains it -- renaming
+        # "Aristotle" to "Aristotle Onassis", or to a name sharing the previous
+        # author's surname, which is the ordinary case for a fork. Reporting those
+        # said all three styles would bold the wrong name on a file that had been
+        # renamed completely, so a part belonging to the new name is skipped too.
+        own_tokens = set(author_name.split())
         stragglers = set()
         for old_name in found:
             if old_name == author_name:
                 continue
-            if old_name in patched:
-                stragglers.add(old_name)
             for part in {old_name.split()[0], old_name.split()[-1]}:
+                if part in own_tokens:
+                    continue
                 if len(part) > 3 and re.search(r'\b' + re.escape(part) + r'\b',
                                                patched):
                     stragglers.add(part)
