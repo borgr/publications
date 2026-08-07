@@ -107,13 +107,15 @@ class TestCheckCredential:
                         "https://git@git.overleaf.com/000000000000000000000000"],
                        check=True)
         problem = overleaf_auth.check_credential(str(repo))
-        # Returning at all is most of the claim. What git says depends on where the
-        # test runs: it asks for a password when it can reach Overleaf, and fails
-        # to resolve the host on a runner with no network -- but it must never sit
-        # waiting, which is the state the assertion below cannot be reached from.
-        assert any(s in problem for s in (
-            "terminal prompts disabled", "Authentication failed",
-            "could not resolve", "Could not resolve")), problem
+        # Returning at all is the whole claim, and it is the only part worth
+        # asserting: git's wording is not ours to depend on. This test spent a day
+        # green and then failed because Overleaf started answering an unauthorized
+        # fetch with "see https://www.overleaf.com/learn/... for more information"
+        # instead of "Authentication failed", which says nothing about whether the
+        # code under test still works. What must hold is that a caller gets a
+        # problem back, with the fix in it, having waited for nobody.
+        assert problem is not None
+        assert "install_overleaf_credential.py" in problem
 
     def test_the_reported_error_carries_no_credential(self, tmp_path):
         """Whatever git says goes into a log and a desktop notification."""
@@ -185,16 +187,26 @@ class TestStoreCredential:
                 "https://git:olp_tok@git.overleaf.com/p", str(repo))
         assert "credential.helper" in str(excinfo.value)
 
-    def test_the_token_reaches_the_store_git_would_read_it_back_from(self, tmp_path):
+    def test_the_token_reaches_the_store_git_would_read_it_back_from(
+            self, tmp_path, monkeypatch):
         """Against a real helper, so this covers what `git credential approve`
         actually does rather than that it was called.
 
         Uses `store --file=` -- a plaintext file -- because it is the one helper
         available on every platform the suite runs on. The real install uses
         whatever `credential.helper` is set to, which on macOS is the keychain.
+
+        The global config has to be neutralised, not merely overridden. `git
+        credential fill` queries every configured helper and takes the first
+        answer, so on the maintainer's own machine the osxkeychain helper answered
+        first with the real Overleaf token -- the assertion failed against a
+        credential this test never stored, and pytest printed that token into the
+        failure output.
         """
         repo = tmp_path / "overleaf"
         repo.mkdir()
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         creds = tmp_path / "creds"
         subprocess.run(["git", "-C", str(repo), "config", "credential.helper",

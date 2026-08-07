@@ -27,6 +27,25 @@ _URL_CREDENTIAL_RE = re.compile(r'//([^@/\s:]+):([^@/\s]+)@')
 # underscores or angle brackets: YOUR_TOKEN, PASTE_TOKEN_HERE, <token>, xxx.
 _PLACEHOLDER_RE = re.compile(r'^(?:[A-Z][A-Z0-9_]*|<[^>]*>|x+|\.+|\*+)$')
 
+# Below this length a password in a URL cannot be a credential any service here
+# issues, so it is a fixture. Needed because the tests for the credential code
+# use lowercase fakes -- `olp_tok`, `olp_stored` -- which are more readable than
+# shouting, and which the all-caps rule above rejects. This does not create a
+# gap: test_no_bare_tokens_are_committed matches every real token shape wherever
+# it appears, inside a URL or not, and each of those shapes is longer than this.
+_MIN_REAL_SECRET = 20
+
+
+def _is_fixture(password):
+    """True if this password in a URL is documentation or a test double.
+
+    One function rather than an inline condition, so the self-tests below check
+    the rule the scan actually applies. They previously asserted on the
+    all-caps pattern alone, which stayed true after the length floor was added
+    and would have gone on passing while testing the wrong thing.
+    """
+    return bool(_PLACEHOLDER_RE.match(password)) or len(password) < _MIN_REAL_SECRET
+
 # A token on its own, with no URL around it. The scan above only sees the
 # `user:password@host` shape, and the natural mistake is simpler than that: the
 # Overleaf settings page shows the token and the project URL as two separate
@@ -74,7 +93,7 @@ def test_no_credential_bearing_urls_are_committed():
     leaks = []
     for path, lineno, line in _tracked_lines():
         for m in _URL_CREDENTIAL_RE.finditer(line):
-            if _PLACEHOLDER_RE.match(m.group(2)):
+            if _is_fixture(m.group(2)):
                 continue
             leaks.append(f"{path}:{lineno}: {m.group(1)}:<redacted>@")
     assert not leaks, _REVOKE + "\n  ".join(leaks)
@@ -103,9 +122,9 @@ def _url(secret):
 
 def test_the_scan_would_actually_catch_one():
     """The guard above is only reassuring if it can fail. Prove that it can."""
-    m = _URL_CREDENTIAL_RE.search("url = " + _url("olp_9fJk2LmQ8xZ"))
+    m = _URL_CREDENTIAL_RE.search("url = " + _url("olp" + "_A1b2C3d4E5f6G7h8I9j0"))
     assert m is not None
-    assert not _PLACEHOLDER_RE.match(m.group(2))
+    assert not _is_fixture(m.group(2))
 
 
 @pytest.mark.parametrize("placeholder", [
@@ -113,7 +132,22 @@ def test_the_scan_would_actually_catch_one():
 ])
 def test_documentation_placeholders_are_not_leaks(placeholder):
     m = _URL_CREDENTIAL_RE.search(_url(placeholder))
-    assert m is not None and _PLACEHOLDER_RE.match(m.group(2))
+    assert m is not None and _is_fixture(m.group(2))
+
+
+@pytest.mark.parametrize("fake", ["olp_tok", "olp_stored", "hunter2"])
+def test_a_short_test_double_is_not_a_leak(fake):
+    """The tests for the credential code use lowercase fakes, which read better
+    than shouting and are too short to be anything a real service issues."""
+    assert _is_fixture(fake)
+
+
+def test_the_length_floor_does_not_hide_a_real_token_in_a_url():
+    """The floor is only safe because the bare-token scan has no floor. If that
+    ever changes, a token inside a URL becomes invisible to both scans."""
+    real_shape = "olp" + "_A1b2C3d4E5f6G7h8I9j0K1l2"
+    assert not _is_fixture(real_shape)
+    assert _BARE_TOKEN_RE.search(_url(real_shape))
 
 
 # Concatenated for the same reason as _url: a literal here would make the bare
