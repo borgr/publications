@@ -44,10 +44,12 @@ from urllib.request import Request, urlopen
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
 
+import config
 from bib_utils import (
     escape_field_value,
     extract_field,
     is_wellformed_entry,
+    lists_author,
     normalize_text,
     parse_bibtex,
     publication_rank,
@@ -301,9 +303,16 @@ def pick_published(bibtex_list: list[str], query_title: str = "",
     0.76 against "SEA-HELM: Southeast Asian Holistic Evaluation of Language
     Models", a different paper three years later. So a merely-similar title also
     has to agree on the year.
+
+    And whatever the titles say, an entry that does not list the author is not a
+    version of the author's paper. Without that test this function accepted a 2022
+    ISAIM invited talk by one of a Nature paper's twenty co-authors as that paper's
+    published version, on a title similarity of 0.86 -- and the CV printed it.
     """
     published = corr = None
     for bib in bibtex_list:
+        if not lists_author(bib, config.AUTHOR_NAME):
+            continue
         if _is_corr(bib):
             if corr is None:
                 corr = bib

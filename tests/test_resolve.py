@@ -488,6 +488,31 @@ def test_an_identical_title_keeps_its_publication_lag():
     assert published is not None
 
 
+def test_a_result_that_does_not_list_the_author_is_rejected():
+    """The Slonim mis-resolution, which every title-based guard let through.
+
+    A near-identical title, the right year, and a sole author who is one of the real
+    paper's co-authors -- so the only thing that separates it from a genuine
+    published version is the author list.
+    """
+    candidate = ('@inproceedings{isaim, author = {Noam Slonim}, '
+                 'title = {Project Debater - an autonomous debating system}, '
+                 'booktitle = {ISAIM 2022}, year = {2022}}')
+    published, _corr = resolve_arxiv.pick_published(
+        [candidate], query_title="An autonomous debating system", query_year=2021)
+    assert published is None
+
+
+def test_a_result_that_does_list_the_author_is_accepted():
+    """So the guard above rejects on the author list and not on the title."""
+    candidate = ('@inproceedings{ok, author = {Noam Slonim and Leshem Choshen}, '
+                 'title = {Project Debater - an autonomous debating system}, '
+                 'booktitle = {ISAIM 2022}, year = {2022}}')
+    published, _corr = resolve_arxiv.pick_published(
+        [candidate], query_title="An autonomous debating system", query_year=2021)
+    assert published is not None
+
+
 def test_year_guard_does_not_fire_without_a_query_year():
     candidate = ('@inproceedings{c, title = {A Somewhat Similar Paper Title Here}, '
                  'booktitle = {V}, year = {2025}}')

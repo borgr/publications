@@ -271,6 +271,38 @@ def is_preprint(entry):
     return bool(re.search(r'\b(archiveprefix|eprint)\s*=', content, re.IGNORECASE))
 
 
+def surname(full_name):
+    """The last whitespace-separated word of a name, normalized.
+
+    Surname rather than the whole name, because the same person appears as
+    "Leshem Choshen", "L. Choshen" and "Choshen, Leshem" across DBLP, the ACL
+    Anthology and hand-written entries, and only the surname survives all three.
+    """
+    parts = [p for p in re.split(r'[\s,]+', str(full_name).strip()) if p]
+    return normalize_text(parts[-1] if parts else "")
+
+
+def lists_author(content, full_name):
+    """False if the entry credits a list of people that this person is not among.
+
+    The check a mis-resolution fails. Title similarity alone accepted an ISAIM
+    invited talk by one of a Nature paper's twenty co-authors as that paper's
+    published version, because "An autonomous debating system" is a substring of
+    "Project Debater - an autonomous debating system" -- and nothing anywhere
+    asked whether the entry it settled on lists the person whose CV this is.
+
+    `editor` counts, because proceedings volumes the author edited carry no author
+    field. An entry with neither field is accepted: that is a stub with no credits
+    at all, which is `build_bib`'s missing-field problem and a different report --
+    this one is about being contradicted, not about being uninformative.
+    """
+    wanted = surname(full_name)
+    if not wanted:
+        return True
+    fields = " ".join(extract_field(content, f) or "" for f in ("author", "editor"))
+    return not fields.strip() or wanted in normalize_text(fields)
+
+
 def _entry_year(entry):
     m = re.search(r'\b(1[89]\d{2}|20\d{2}|21\d{2})\b',
                   extract_field(entry.get("content", "") or "", "year"))
