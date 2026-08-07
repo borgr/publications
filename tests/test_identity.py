@@ -19,10 +19,13 @@ from identity import (
     MATCH_NORMALIZED,
     IdentityStore,
     classify_title,
+    duplicate_groups_by_bib_identifier,
     find_duplicate_titles,
     harvest_ids_from_bibtex,
     harvest_ids_from_s2,
     join_citations,
+    merge_overlapping_groups,
+    normalize_identifier,
     normalize_title,
     title_stem,
     titles_match,
@@ -264,6 +267,90 @@ def test_harvest_from_bibtex():
         'url = {https://arxiv.org/abs/2404.06214}, doi = {10.18653/v1/x.1}}')
     assert ids["arxiv"] == "2404.06214"
     assert ids["doi"] == "10.18653/v1/x.1"
+
+
+@pytest.mark.parametrize("url, expected", [
+    # The only form that matters, and the only one that used to fail: inside a
+    # field, where the URL is followed by a brace rather than by a slash or the
+    # end of the string. `harvest_ids_from_bibtex` has no other caller, so no ACL
+    # id was ever harvested from a bibliography.
+    ('url = {https://aclanthology.org/2022.coling-1.401},', "2022.coling-1.401"),
+    ('url = "https://aclanthology.org/2022.coling-1.401",', "2022.coling-1.401"),
+    ('url = {https://aclanthology.org/2022.coling-1.401}', "2022.coling-1.401"),
+    ('url = {https://aclanthology.org/2022.coling-1.401.pdf},', "2022.coling-1.401"),
+    ('url = {https://aclanthology.org/2022.coling-1.401/},', "2022.coling-1.401"),
+    ('see https://aclanthology.org/2022.coling-1.401.', "2022.coling-1.401"),
+])
+def test_an_acl_url_is_harvested_from_a_bibtex_field(url, expected):
+    assert harvest_ids_from_bibtex("@inproceedings{k, " + url + "}")["acl"] == expected
+
+
+def test_a_doi_is_compared_case_insensitively():
+    """DBLP writes the DOI upper-case where the ACL Anthology writes it lower.
+
+    Compared literally they are two identifiers, so the duplicate they prove goes
+    unnoticed -- which is how three papers reached the CV twice.
+    """
+    assert (normalize_identifier("doi", "10.18653/V1/2023.CONLL-1.29")
+            == normalize_identifier("doi", "10.18653/v1/2023.conll-1.29"))
+    # A DBLP key is case-sensitive, and Scholar's ids are opaque, so they are not
+    # folded: doing so would merge two papers on a coincidence of spelling.
+    assert normalize_identifier("dblp", "journals/corr/abs-1") != \
+        normalize_identifier("dblp", "JOURNALS/CORR/ABS-1")
+
+
+# ── duplicate detection from the bibliography ────────────────────────────────
+
+_PAIR_BIB = (
+    "@inproceedings{karidi2023muler,\n"
+    "  title = {MuLER: Detailed and Scalable Reference-based Evaluation},\n"
+    "  doi = {10.18653/v1/2023.conll-1.29},\n}\n\n"
+    "@inproceedings{DBLP:conf/conll/KaridiCPA23,\n"
+    "  title = {MuLER: Multi-Level Evaluation with Reference},\n"
+    "  doi = {10.18653/V1/2023.CONLL-1.29},\n}\n\n"
+    "@inproceedings{unrelated2020other,\n"
+    "  title = {Something Else Entirely},\n"
+    "  doi = {10.1000/other},\n}\n"
+)
+
+
+def test_a_shared_doi_in_the_bibliography_is_a_duplicate():
+    """The store-based detector cannot see this pair: the DBLP-keyed half has no
+    record at all, because it never went through resolution."""
+    groups = duplicate_groups_by_bib_identifier(_PAIR_BIB)
+    assert groups == [["DBLP:conf/conll/KaridiCPA23", "karidi2023muler"]]
+
+
+def test_an_entry_alone_with_its_identifier_is_not_a_duplicate():
+    assert duplicate_groups_by_bib_identifier(
+        "@misc{only, doi = {10.1000/x}}") == []
+
+
+def test_keys_in_use_limits_the_search_to_the_table():
+    """An entry left in orig.bib but no longer on the table is not a duplicate of
+    anything -- build_bib never emits it."""
+    assert duplicate_groups_by_bib_identifier(
+        _PAIR_BIB, keys_in_use={"karidi2023muler", "unrelated2020other"}) == []
+
+
+def test_the_same_paper_found_twice_over_becomes_one_group():
+    """Two entries can share a DOI and an arXiv id at once. Reported separately,
+    each overlap is its own decision about one paper, and the two can disagree
+    about which entry survives."""
+    bib = ("@misc{a, doi = {10.1000/x}, eprint = {2401.00001}}\n\n"
+           "@misc{b, doi = {10.1000/x}, eprint = {2401.00001}}\n")
+    assert duplicate_groups_by_bib_identifier(bib) == [["a", "b"]]
+
+
+@pytest.mark.parametrize("groups, expected", [
+    ([["a", "b"], ["b", "c"]], [["a", "b", "c"]]),          # chained
+    ([["a", "b"], ["c", "d"]], [["a", "b"], ["c", "d"]]),   # disjoint
+    ([["a", "b"], ["a", "b"]], [["a", "b"]]),               # the same pair twice
+    ([["a"], ["b", "c"]], [["b", "c"]]),                    # a lone member is not a group
+    ([["a", "b"], ["c", "d"], ["b", "d"]], [["a", "b", "c", "d"]]),  # joined late
+])
+def test_overlapping_groups_merge(groups, expected):
+    assert merge_overlapping_groups(groups) == expected
 
 
 # ── table hygiene ────────────────────────────────────────────────────────────

@@ -35,7 +35,7 @@ import json
 import os
 import re
 
-from bib_utils import normalize_text
+from bib_utils import extract_field, normalize_text, parse_bibtex
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 IDENTITY_PATH = os.path.join(FILE_DIR, "identity.json")
@@ -210,7 +210,7 @@ class IdentityStore:
             for key in sorted(self.records):
                 value = (self.records[key] or {}).get(field)
                 if value:
-                    owners.setdefault(value, []).append(key)
+                    owners.setdefault(normalize_identifier(field, value), []).append(key)
             out.extend((field, value, keys)
                        for value, keys in sorted(owners.items()) if len(keys) > 1)
         return out
@@ -467,6 +467,121 @@ def duplicate_groups_by_identifier(store, keys_in_use=None):
     return groups
 
 
+def duplicate_groups_by_bib_identifier(bib_text, keys_in_use=None):
+    """Return [[bib_key, ...]] for bibliography entries sharing an identifier.
+
+    Reads the bibliography instead of the identity store, and so does not depend
+    on the store having been populated. The store learns an identifier only when a
+    paper goes through resolution, which means an entry that arrived already
+    complete -- carried over from DBLP, or pasted in by hand -- has no record at
+    all, and `duplicate_groups_by_identifier` cannot see it however many
+    identifiers the entry itself carries.
+
+    Three papers were printed on the CV twice for exactly that reason, each with
+    the same DOI written plainly in both of its entries:
+
+        10.18653/v1/2023.conll-1.29   DBLP:conf/conll/KaridiCPA23 / karidi2023muler
+        10.18653/v1/2022.conll-1.14   DBLP:conf/conll/PatelCA22   / patel2022neurons
+        2022.coling-1.401             DBLP:conf/coling/YehudaiCFA22 / yehudai2022reinforcement
+
+    Harvesting from the entries needs no accumulated state to be correct, so it
+    keeps working on a fresh clone with no identity.json -- which is the case for
+    every fork.
+    """
+    owners = {}
+    for entry in parse_bibtex(bib_text):
+        key = entry["item_name"]
+        if keys_in_use is not None and key not in keys_in_use:
+            continue
+        for field, value in harvest_ids_from_bibtex(entry["content"]).items():
+            slot = (field, normalize_identifier(field, value))
+            if key not in owners.setdefault(slot, []):
+                owners[slot].append(key)
+
+    groups, seen = [], set()
+    for slot in sorted(owners):
+        signature = tuple(sorted(owners[slot]))
+        if len(signature) < 2 or signature in seen:
+            continue
+        seen.add(signature)
+        groups.append(list(signature))
+    return groups
+
+
+def merge_overlapping_groups(groups):
+    """Collapse groups that share a member into one group.
+
+    The detectors run independently and legitimately overlap: one pair can be
+    caught by DOI, by arXiv id and by title at once. Left separate, each overlap
+    becomes its own decision about the same paper, and two of them can disagree
+    about which entry survives -- so the merge is done before anything is ranked,
+    not after.
+    """
+    merged = []
+    for group in groups:
+        members = set(group)
+        if len(members) < 2:
+            continue
+        overlapping = [m for m in merged if m & members]
+        for m in overlapping:
+            members |= m
+            merged.remove(m)
+        merged.append(members)
+    return [sorted(m) for m in merged]
+
+
+def duplicate_groups_by_any_known_title(name_by_key, bib_text):
+    """Return [[bib_key, ...]] for papers sharing any title they are known under.
+
+    A paper has two titles here -- the one in the table and the one in its BibTeX
+    entry -- and they are not always the same string. When one entry was taken from
+    Scholar and the other from DBLP, each source's idea of the title can end up
+    filed against the other's row:
+
+        slonim2021autonomous      table: An autonomous debating system
+                                    bib: Project Debater - an autonomous debating system
+        DBLP:...SlonimBABBBCCDE21 table: Project Debater  an Autonomous Debating System
+                                    bib: An autonomous debating system
+
+    One Nature paper, printed twice in the CV's Journals section. Comparing table
+    titles to table titles finds nothing, because they differ by the "Project
+    Debater" prefix; comparing bib titles to bib titles finds nothing either, for
+    the same reason. Comparing every title of one paper against every title of the
+    other is what makes the pair visible, and it is the crossing that carries the
+    information -- each row is named what the other row's entry is titled.
+
+    Nor could any identifier have caught it: `slonim2021autonomous` has no DOI, no
+    eprint and no URL, so there was nothing to compare.
+
+    Deliberately an equality test on normalized titles rather than a similarity
+    one. Titles that differ only by a subtitle -- "Findings of the BabyLM
+    Challenge" against "Findings of the Second BabyLM Challenge" -- are usually
+    different papers, and a containment or fuzzy rule merges them.
+    """
+    titles_of = {}
+    entries = {e["item_name"]: e for e in parse_bibtex(bib_text)}
+    for key, name in name_by_key.items():
+        titles = {normalize_title(str(name or ""))}
+        entry = entries.get(key)
+        if entry is not None:
+            titles.add(normalize_title(extract_field(entry["content"], "title") or ""))
+        titles_of[key] = {t for t in titles if t}
+
+    owners = {}
+    for key, titles in titles_of.items():
+        for title in titles:
+            owners.setdefault(title, []).append(key)
+
+    groups, seen = [], set()
+    for title in sorted(owners):
+        signature = tuple(sorted(owners[title]))
+        if len(signature) < 2 or signature in seen:
+            continue
+        seen.add(signature)
+        groups.append(list(signature))
+    return groups
+
+
 def find_duplicate_titles(row_names):
     """Return {normalized_title: [raw names]} for table rows that collide.
 
@@ -484,7 +599,30 @@ def find_duplicate_titles(row_names):
 
 _ARXIV_RE = re.compile(r'(?:arxiv[:/]|abs/)\s*(\d{4}\.\d{4,5})', re.IGNORECASE)
 _DOI_RE = re.compile(r'\b(10\.\d{4,9}/[^\s{}",]+)', re.IGNORECASE)
-_ACL_RE = re.compile(r'aclanthology\.org/([A-Za-z0-9.\-]+?)(?:\.pdf|/|$)', re.IGNORECASE)
+#
+# The terminator is a lookahead over the characters that actually end a URL in
+# the place this is used. The previous version accepted only `.pdf`, `/` or
+# end-of-string, and the sole caller is `harvest_ids_from_bibtex` -- where the URL
+# is always inside a field and therefore always followed by `}`, `"` or `,`. So
+# no ACL identifier was ever harvested from a bibliography, and two entries for
+# one ACL paper had nothing in common to match on.
+_ACL_RE = re.compile(r'aclanthology\.org/([A-Za-z0-9.\-]+?)(?:\.pdf)?(?=[/\s},"\']|$)',
+                     re.IGNORECASE)
+
+
+def normalize_identifier(field, value):
+    """Fold an identifier to the form two sources can be compared in.
+
+    DOIs and ACL ids are case-insensitive by specification, and the sources
+    disagree in practice: DBLP writes `10.18653/V1/2023.CONLL-1.29` where the ACL
+    Anthology writes the same DOI in lower case. Compared literally they are two
+    identifiers, so the duplicate they prove goes unnoticed. The rest are left
+    alone -- a DBLP key is case-sensitive, and Scholar's ids are opaque.
+    """
+    value = str(value or "").strip()
+    if field in ("doi", "acl"):
+        return value.lower()
+    return value
 
 
 def harvest_ids_from_bibtex(bibtex):
@@ -498,7 +636,10 @@ def harvest_ids_from_bibtex(bibtex):
         ids["doi"] = m.group(1).rstrip('.,')
     m = _ACL_RE.search(bibtex)
     if m:
-        ids["acl"] = m.group(1)
+        # rstrip as for the DOI: a trailing period belongs to the sentence.
+        acl = m.group(1).rstrip('.,')
+        if acl:
+            ids["acl"] = acl
     return ids
 
 

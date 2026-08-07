@@ -35,9 +35,12 @@ from bib_utils import (
 from citations_io import read_citation_rows
 from identity import (
     IdentityStore,
+    duplicate_groups_by_any_known_title,
+    duplicate_groups_by_bib_identifier,
     duplicate_groups_by_identifier,
     find_duplicate_titles,
     join_citations,
+    merge_overlapping_groups,
 )
 from table_io import read_table, write_table
 
@@ -96,7 +99,20 @@ def bind_dropped_scholar_ids(df, drops):
 
 
 def plan(df, bib_text):
-    """Return (drops, unresolved) where drops is [(loser_row, winner_row, why)]."""
+    """Return (drops, unresolved, suspected).
+
+    `drops` is [(loser_row, winner_row, why)] and is safe to apply: every group in
+    it is held together by an identifier or by identical titles, which is proof
+    that two rows are one paper.
+
+    `suspected` is [[(name, key), ...]] -- groups that only a title crossing
+    connects. Those are reported rather than applied, because the same crossing
+    arises from a *mis-resolution*, and then the entries genuinely describe two
+    different works so ranking them picks a winner on the strength of the wrong
+    one's metadata. That happened: a Scholar record for a Nature paper was added
+    as a second row, resolved to an unrelated ISAIM talk by one of its authors,
+    and `choose_published` preferred the talk -- newer, and with a booktitle.
+    """
     by_key = {e["item_name"]: e for e in parse_bibtex(bib_text)}
     drops, unresolved = [], []
 
@@ -107,10 +123,33 @@ def plan(df, bib_text):
         key = str(row.get("Bib") or "").strip()
         if key and key.lower() not in ("nan", "none"):
             name_by_key[key] = str(row.get("Name") or "")
+    keys_in_use = set(name_by_key)
+    store = IdentityStore.load()
+
+    def _names(keys):
+        return [name_by_key[k] for k in keys if k in name_by_key]
+
     groups = []
-    for keys in duplicate_groups_by_identifier(IdentityStore.load(), set(name_by_key)):
-        groups.append([name_by_key[k] for k in keys if k in name_by_key])
+    for keys in duplicate_groups_by_identifier(store, keys_in_use):
+        groups.append(_names(keys))
+    # And from the entries themselves, which need no accumulated state to be
+    # right. The store misses any paper whose entry never went through
+    # resolution, and four papers were reaching the CV twice because of it.
+    for keys in duplicate_groups_by_bib_identifier(bib_text, keys_in_use):
+        groups.append(_names(keys))
     groups.extend(find_duplicate_titles(df["Name"].dropna()).values())
+    # One paper, one decision: the detectors overlap by design, and two
+    # overlapping groups can otherwise each nominate a different survivor.
+    groups = merge_overlapping_groups(groups)
+
+    # Reported, never applied -- see the docstring. Anything the evidence above
+    # already covers is dropped from the report rather than raised twice.
+    proven = {n for g in groups for n in g}
+    suspected = []
+    for keys in duplicate_groups_by_any_known_title(name_by_key, bib_text):
+        names = _names(keys)
+        if len(names) > 1 and not set(names) & proven:
+            suspected.append([(n, k) for n, k in zip(names, keys)])
 
     for names in groups:
         if len(names) < 2:
@@ -128,11 +167,57 @@ def plan(df, bib_text):
             continue
 
         winner_entry, loser_entries = choose_published([e for _, _, e in rankable])
+        winner_entry, loser_entries, tiebreak = _prefer_the_cited_row(
+            store, rankable, winner_entry, loser_entries)
         winner = next(c for c in rankable if c[2] is winner_entry)
         for loser_entry in loser_entries:
             loser = next(c for c in rankable if c[2] is loser_entry)
-            drops.append((loser, winner, _why(winner_entry, loser_entry)))
-    return drops, unresolved
+            drops.append((loser, winner,
+                          tiebreak or _why(winner_entry, loser_entry)))
+    return drops, unresolved, suspected
+
+
+def _prefer_the_cited_row(store, rankable, winner_entry, loser_entries):
+    """Among entries `choose_published` ranks equally, keep the cited one.
+
+    A tie means the two entries describe the same version of the same paper, so
+    which one survives is bookkeeping rather than a claim about the publication --
+    and `choose_published` breaks it on content length, which is arbitrary: a DBLP
+    record carries `bibsource` and `timestamp` boilerplate and so wins by about
+    twenty bytes over the identical hand-written entry.
+
+    That is the wrong way round. The row whose key has a Scholar ID bound is the
+    one citations reach the paper through; dropping it means rebinding the ID onto
+    the survivor and hoping the rebind holds. Here it did not: keeping the DBLP
+    rows for MuLER and the two machine-translation papers would have orphaned 15
+    citations, which `citation_effect` then refused outright -- a correct refusal,
+    but it left the duplicates in place with no way forward.
+
+    Returns (winner, losers, reason) where reason is None unless this function
+    changed the outcome -- `_why` can only report the rank comparison, which for a
+    tie prints the uninformative "@inproceedings ranks 85 vs @inproceedings at 85".
+    """
+    tied = [e for e in [winner_entry] + list(loser_entries)
+            if is_preprint(e) == is_preprint(winner_entry)
+            and publication_rank(e) == publication_rank(winner_entry)
+            and _entry_year(e) == _entry_year(winner_entry)]
+    if len(tied) < 2:
+        return winner_entry, loser_entries, None
+
+    def key_of(entry):
+        return next((k for _, k, e in rankable if e is entry), "")
+
+    def cited(entry):
+        return bool((store.records.get(key_of(entry)) or {}).get("scholar_id"))
+
+    preferred = next((e for e in tied if cited(e)), None)
+    if preferred is None or preferred is winner_entry:
+        return winner_entry, loser_entries, None
+    losers = [e for e in [winner_entry] + list(loser_entries) if e is not preferred]
+    return preferred, losers, (
+        f"the records are equivalent (@{preferred['type']}, same year, same "
+        f"rank), and [{key_of(preferred)}] is the one Scholar citations are "
+        f"bound to")
 
 
 def _why(winner, loser):
@@ -164,7 +249,17 @@ def main():
     with open(BIB_PATH) as f:
         bib_text = f.read()
 
-    drops, unresolved = plan(df, bib_text)
+    drops, unresolved, suspected = plan(df, bib_text)
+
+    if suspected:
+        print(f"{len(suspected)} group(s) look like one paper but are not "
+              f"provably so — not removing them:")
+        for group in suspected:
+            for name, key in group:
+                print(f"  [{key or '(no key)':<40}] {name[:56]}")
+            print("  One row is named what the other's BibTeX entry is titled. "
+                  "That is either\n  a duplicate, or a row resolved to the wrong "
+                  "paper — check the entries before\n  removing either row.\n")
 
     if unresolved:
         print(f"{len(unresolved)} duplicate group(s) cannot be ranked "
