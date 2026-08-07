@@ -1,0 +1,27 @@
+# Keeps the workflow's own actions current.
+#
+# GitHub retires action major versions on its own schedule, and when it does, an
+# unattended weekly run starts failing on `uses: actions/checkout@v4` rather than
+# on anything in this repository -- a red badge with no commit behind it, which is
+# the kind of failure that trains you to ignore the badge.
+#
+# Only github-actions. The Python pins in requirements.txt are deliberately `>=`
+# floors, so there is no upper bound for Dependabot to raise; the weekly
+# scheduled run in ci.yml is what surfaces a dependency that broke, and the
+# `floor` job is what proves the floors still install.
+#
+# A fork inherits this file, but Dependabot stays off until the forker enables it
+# in their own repository settings.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      # Off the hour, and after the 07:23 CI run, so a bump lands on a workflow
+      # that has just been proven green.
+      time: "08:17"
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "ci"
