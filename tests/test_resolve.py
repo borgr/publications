@@ -494,3 +494,255 @@ def test_year_guard_does_not_fire_without_a_query_year():
     published, _corr = resolve_arxiv.pick_published(
         [candidate], query_title="A Somewhat Similar Paper Title Here")
     assert published is not None
+
+
+# ── the source ladder ─────────────────────────────────────────────────────────
+#
+# resolve() asks five services in a fixed order, and the order is the whole
+# design: DBLP and the ACL Anthology give the version of record, OpenAlex may
+# hand back a preprint, and arXiv always does. Only the labels in
+# _PUBLISHED_SOURCES may overwrite an existing orig.bib entry, so a step that
+# quietly moved up the ladder would let a preprint replace a published paper.
+
+_TITLE = "A Paper With A Title Long Enough To Search On"
+
+
+@pytest.fixture
+def ladder(monkeypatch):
+    """Every source stubbed to return nothing; a test enables the ones it needs.
+
+    Anything left unstubbed would reach the network, so they are all closed by
+    default rather than listed per test.
+    """
+    monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
+    closed = {
+        "search_dblp": lambda t: [],
+        "query_s2_by_arxiv": lambda a: None,
+        "query_s2_by_title": lambda t, y="": None,
+        "fetch_acl_bib": lambda i, k: None,
+        "fetch_openreview_bib": lambda i, k: None,
+        "search_openalex": lambda t: None,
+        "fetch_arxiv_bib": lambda a, k, known_title=None: f"@misc{{{k}, arxiv}}",
+        "_clibib_fetch": lambda: None,
+    }
+    for name, stub in closed.items():
+        monkeypatch.setattr(resolve_arxiv, name, stub)
+
+    def _open(**stubs):
+        for name, stub in stubs.items():
+            monkeypatch.setattr(resolve_arxiv, name, stub)
+    return _open
+
+
+def test_an_acl_record_is_preferred_over_openreview_and_openalex(ladder):
+    """The Anthology entry is the citation the venue itself publishes."""
+    ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
+           fetch_acl_bib=lambda i, k: f"@inproceedings{{{k}, acl={i}}}",
+           fetch_openreview_bib=lambda i, k: pytest.fail("asked OpenReview anyway"),
+           search_openalex=lambda t: pytest.fail("asked OpenAlex anyway"))
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source == "ACL Anthology"
+    assert "2024.acl-1.1" in bib
+
+
+def test_s2_is_queried_by_arxiv_id_when_there_is_one(ladder):
+    """An identifier cannot return the wrong paper; a title can."""
+    asked = []
+    ladder(query_s2_by_arxiv=lambda a: asked.append(a) or None,
+           query_s2_by_title=lambda t, y="": pytest.fail(
+               "searched by title with an arXiv id in hand"))
+    resolve(_TITLE, "2401.00001", "k1", "")
+    assert asked == ["2401.00001"]
+
+
+def test_openreview_is_found_through_s2s_venue_url(ladder):
+    ladder(query_s2_by_title=lambda t, y="": {
+               "externalIds": {},
+               "publicationVenue": {"url": "https://openreview.net/forum?id=AbC123"}},
+           fetch_openreview_bib=lambda i, k: f"@inproceedings{{{k}, forum={i}}}")
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source == "OpenReview"
+    assert "AbC123" in bib
+
+
+def test_an_openreview_url_already_in_the_entry_is_used(ladder):
+    """No lookup needed: a previous run, or the author, already recorded it."""
+    ladder(fetch_openreview_bib=lambda i, k: f"@inproceedings{{{k}, forum={i}}}")
+    bib, source = resolve(_TITLE, None, "k1",
+                          "url = {https://openreview.net/forum?id=XyZ789}")
+    assert source == "OpenReview"
+    assert "XyZ789" in bib
+
+
+def test_a_source_that_returns_nothing_falls_through_to_the_next(ladder):
+    """Each fetch can fail on its own; the ladder must keep descending rather
+    than treating an empty response as a resolution."""
+    ladder(query_s2_by_title=lambda t, y="": {
+               "externalIds": {"ACL": "2024.acl-1.1"},
+               "publicationVenue": {"url": "https://openreview.net/forum?id=AbC"}},
+           fetch_acl_bib=lambda i, k: None,
+           fetch_openreview_bib=lambda i, k: None,
+           search_openalex=lambda t: {"doi": "https://doi.org/10.1/x"},
+           openalex_to_bibtex=lambda w, k: (
+               f"@article{{{k}, title = {{T}}, journal = {{A Real Journal}}}}", True))
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source == "OpenAlex"
+    assert "A Real Journal" in bib
+
+
+def test_an_openalex_preprint_is_labelled_as_one(ladder):
+    """OpenAlex indexes preprints alongside published work, and the label is the
+    only thing standing between one and an existing published entry."""
+    ladder(search_openalex=lambda t: {"doi": "https://doi.org/10.48550/arXiv.2401.1"},
+           openalex_to_bibtex=lambda w, k: (f"@misc{{{k}, title = {{T}}}}", False))
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source == "OpenAlex (preprint)"
+    assert source not in resolve_arxiv._PUBLISHED_SOURCES, \
+        "a preprint must never replace an existing entry"
+
+
+def test_an_arxiv_doi_from_openalex_is_not_recorded(ladder):
+    """10.48550/... only ever resolves back to the preprint, so recording it
+    would make the next run spend a request being rejected by the rank guard."""
+    ladder(search_openalex=lambda t: {"doi": "https://doi.org/10.48550/arXiv.2401.1"},
+           openalex_to_bibtex=lambda w, k: (f"@misc{{{k}, title = {{T}}}}", False))
+    store = IdentityStore()
+    resolve(_TITLE, None, "k1", "", store=store)
+    assert not (store.records.get("k1") or {}).get("doi")
+
+
+def test_a_known_arxiv_doi_is_never_looked_up(ladder):
+    """It did this 10 times on a real run, and every result was then rejected."""
+    asked = []
+    ladder(_clibib_fetch=lambda: lambda ident: asked.append(ident) or "@misc{z}")
+    store = IdentityStore()
+    store.record("k1", doi="10.48550/arXiv.2401.00001")
+    resolve(_TITLE, None, "k1", "", store=store)
+    assert asked == []
+
+
+def test_dblps_corr_entry_is_used_before_the_export_api(ladder):
+    """Same preprint, one fewer request -- DBLP already returned it."""
+    corr = ('@article{DBLP:journals/corr/abs-2401-00001, title = {T}, '
+            'journal = {CoRR}, volume = {abs/2401.00001}}')
+    ladder(search_dblp=lambda t: [corr],
+           fetch_arxiv_bib=lambda a, k, known_title=None: pytest.fail(
+               "went to the arXiv API with a CoRR entry already in hand"))
+    bib, source = resolve(_TITLE, "2401.00001", "k1", "")
+    assert source == "arXiv (DBLP/CoRR)"
+    assert bib.startswith("@article{k1,"), "the key must be rewritten to ours"
+
+
+def test_the_arxiv_fallback_is_given_the_title_it_searched_on(ladder):
+    """The export API's own metadata can be a stub; the table's title is better."""
+    seen = {}
+    ladder(fetch_arxiv_bib=lambda a, k, known_title=None:
+           seen.update(id=a, title=known_title) or f"@misc{{{k}}}")
+    bib, source = resolve(_TITLE, "2401.00001", "k1", "")
+    assert source == "arXiv (export API)"
+    assert seen == {"id": "2401.00001", "title": _TITLE}
+
+
+def test_nothing_anywhere_is_reported_as_not_found(ladder):
+    """Not an exception, and not an empty entry written to orig.bib."""
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert (bib, source) == ("", "not found")
+
+
+def test_the_s2_crosswalk_is_recorded_even_when_nothing_resolves(ladder):
+    """The point of asking S2 at all: one response binds every identifier this
+    paper has, so a later run matches on an id instead of guessing from a title.
+    """
+    ladder(query_s2_by_title=lambda t, y="": {
+        "externalIds": {"ArXiv": "2401.00001", "DOI": "10.1/x",
+                        "ACL": "2024.acl-1.1"}})
+    store = IdentityStore()
+    resolve(_TITLE, None, "k1", "", store=store)
+    record = store.records.get("k1") or {}
+    assert record.get("arxiv") == "2401.00001"
+    assert record.get("doi") == "10.1/x"
+
+
+def test_the_version_of_record_from_dblp_wins_outright(ladder):
+    """The first rung, and the one that resolves most papers: a DBLP hit stops the
+    ladder before a single further request is spent."""
+    published = ('@inproceedings{DBLP:conf/acl/DoeJ24, '
+                 f'title = {{{_TITLE}}}, booktitle = {{ACL}}, year = {{2024}}}}')
+    ladder(search_dblp=lambda t: [published],
+           query_s2_by_title=lambda t, y="": pytest.fail("kept going after DBLP"))
+    bib, source = resolve(_TITLE, None, "k1", "year = {2024}")
+    assert source == "DBLP"
+    assert bib.startswith("@inproceedings{k1,"), "the key must be rewritten to ours"
+
+
+def test_dblps_identifiers_are_recorded(ladder):
+    published = ('@inproceedings{DBLP:conf/acl/DoeJ24, '
+                 f'title = {{{_TITLE}}}, booktitle = {{ACL}}, year = {{2024}}, '
+                 'doi = {10.18653/v1/2024.acl-1.1}}')
+    ladder(search_dblp=lambda t: [published])
+    store = IdentityStore()
+    resolve(_TITLE, None, "k1", "year = {2024}", store=store)
+    assert (store.records.get("k1") or {}).get("doi") == "10.18653/v1/2024.acl-1.1"
+
+
+# ── rewriting orig.bib when the file has moved on ────────────────────────────
+#
+# The lookups happen over minutes, against a file the author may be editing. An
+# update that cannot find what it meant to change must skip that entry, not
+# guess at where it went.
+
+def test_an_update_for_an_entry_no_longer_in_the_file_is_skipped():
+    text, replaced, appended = update_bib_inplace(
+        PREPRINT, [("some_other_key", PUBLISHED, "DBLP")], [])
+    assert (replaced, appended) == (0, 0)
+    assert text == PREPRINT
+
+
+def test_an_update_that_would_change_nothing_is_not_counted():
+    """merge_published transplants a venue. If the entry already has that venue
+    there is nothing to do, and reporting it as upgraded would be a lie."""
+    text, replaced, _ = update_bib_inplace(
+        PUBLISHED, [("doe2024paper", PUBLISHED, "DBLP")], [])
+    assert replaced == 0
+    assert text == PUBLISHED
+
+
+def test_a_quoted_acl_style_entry_survives_the_transplant():
+    """The Anthology quotes its fields. Assuming braces here is what previously
+    replaced a closing quote with a brace and produced unparseable BibTeX."""
+    quoted = ('@misc{doe2024preprint,\n    title = "A Preprint",\n'
+              '    year = "2024",\n    volume = 12\n}')
+    replacement = ('@inproceedings{doe2024preprint, title = "A Preprint", '
+                   'booktitle = "ACL", year = "2024"}')
+    text, replaced, _ = update_bib_inplace(
+        quoted, [("doe2024preprint", replacement, "ACL Anthology")], [])
+    assert replaced == 1
+    (entry,) = parse_bibtex(text)
+    assert entry["title"] == "A Preprint"
+    assert "ACL" in entry["content"]
+
+
+# ── table cells that are not what the column promises ────────────────────────
+
+def test_a_non_numeric_paper_flag_does_not_exclude_the_row():
+    """The column means "is this a paper", and only an explicit 0 says no. A note
+    typed into it must not silently drop the paper from the CV."""
+    df = _df([{"Name": "A Paper", "Bib": None, "Authors": "Doe, Jane",
+               "year": 2024, "Paper": "yes"}])
+    assert len(get_missing_bib_entries("", df=df)) == 1
+
+
+def test_a_paper_flag_of_zero_excludes_the_row():
+    df = _df([{"Name": "A Proceedings Volume", "Bib": None, "Authors": "Doe, Jane",
+               "year": 2024, "Paper": 0}])
+    assert get_missing_bib_entries("", df=df) == []
+
+
+def test_a_year_that_is_not_a_number_is_kept_as_written():
+    """"to appear", "2024a", "in press": all real cells. The key generator has to
+    take them rather than raise in the middle of a run."""
+    df = _df([{"Name": "A Forthcoming Paper", "Bib": None, "Authors": "Doe, Jane",
+               "year": "to appear"}])
+    (entry,) = get_missing_bib_entries("", df=df)
+    assert entry["item_name"].startswith("doe")
+    assert "nan" not in entry["item_name"]
