@@ -21,6 +21,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import resolve_arxiv as ra
+from bib_utils import extract_field, is_wellformed_entry
 
 
 @pytest.fixture(autouse=True)
@@ -370,7 +371,7 @@ def test_an_unusable_cdate_leaves_the_year_empty(monkeypatch, cdate):
         "cdate": cdate, "content": {"title": {"value": "T"}}})
     bib = ra.fetch_openreview_bib("f", "k1")
     assert "year = {}" in bib
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_venueid_stands_in_for_a_missing_venue(monkeypatch):
@@ -399,7 +400,7 @@ def test_a_brace_in_an_openreview_title_is_escaped(monkeypatch):
         "cdate": 1700000000000,
         "content": {"title": {"value": "A } Paper"}, "venue": {"value": "V"}}})
     bib = ra.fetch_openreview_bib("f", "k1")
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 @pytest.mark.parametrize("forum_id", ["AbC-123_x", "zZ9"])
@@ -563,14 +564,14 @@ def test_authorships_without_a_name_are_skipped():
 
 def test_a_brace_in_an_openalex_title_is_escaped():
     bib, _ = ra.openalex_to_bibtex(_work(title="A } Paper"), "k1")
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_every_openalex_entry_parses_back():
     for over in ({}, {"type": "preprint"}, {"primary_location": {}},
                  {"biblio": {"volume": "1", "first_page": "2", "last_page": "3"}}):
         bib, _ = ra.openalex_to_bibtex(_work(**over), "k1")
-        assert ra.is_wellformed_entry(bib, expected_key="k1"), over
+        assert is_wellformed_entry(bib, expected_key="k1"), over
 
 
 # ── the arXiv fallback ───────────────────────────────────────────────────────
@@ -610,14 +611,14 @@ def test_the_known_title_survives_an_unreachable_arxiv(monkeypatch):
     curl(monkeypatch, {})
     bib = ra.fetch_arxiv_bib("2401.00001", "k1", known_title="A Known Paper")
     assert "title = {A Known Paper}" in bib
-    assert ra.is_wellformed_entry(bib, expected_key="k1"), (
+    assert is_wellformed_entry(bib, expected_key="k1"), (
         "a titleless entry is refused by update_bib_inplace")
 
 
 def test_a_captcha_page_also_keeps_the_known_title(monkeypatch):
     curl(monkeypatch, {"arxiv.org/abs": "<html><body>captcha</body></html>"})
     bib = ra.fetch_arxiv_bib("2401.00001", "k1", known_title="A Known Paper")
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_resolve_hands_the_title_to_the_fallback(monkeypatch):
@@ -630,12 +631,12 @@ def test_resolve_hands_the_title_to_the_fallback(monkeypatch):
     bib, source = ra.resolve("A Paper With A Long Enough Title", "2401.00001", "k1")
     assert source == "arXiv (export API)"
     assert "title = {A Paper With A Long Enough Title}" in bib
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_a_brace_in_the_known_title_is_escaped():
     bib = ra._bare_arxiv_bib("2401.00001", "k1", "A } Paper")
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_a_page_with_no_title_falls_back_to_the_bare_entry(monkeypatch):
@@ -644,8 +645,8 @@ def test_a_page_with_no_title_falls_back_to_the_bare_entry(monkeypatch):
     one -- and is then refused downstream instead of entering the CV blank."""
     curl(monkeypatch, {"arxiv.org/abs": "<html><body>captcha</body></html>"})
     bib = ra.fetch_arxiv_bib("2401.00001", "k1")
-    assert ra.extract_field(bib, "title") == ""
-    assert not ra.is_wellformed_entry(bib, expected_key="k1")
+    assert extract_field(bib, "title") == ""
+    assert not is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_a_page_with_no_author_block_is_survivable(monkeypatch):
@@ -653,7 +654,7 @@ def test_a_page_with_no_author_block_is_survivable(monkeypatch):
                        '<html><h1 class="title">Title:A Paper</h1></html>'})
     bib = ra.fetch_arxiv_bib("2401.00001", "k1")
     assert "author = {}" in bib
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_the_bare_entry_infers_the_year_from_the_arxiv_id():
@@ -666,16 +667,16 @@ def test_an_unparseable_arxiv_id_leaves_the_year_blank():
     A blank is honest; a guessed year would be printed in the CV."""
     bib = ra._bare_arxiv_bib("math/0601001", "k1", "A Paper")
     assert "year = {}" in bib
-    assert ra.is_wellformed_entry(bib, expected_key="k1")
+    assert is_wellformed_entry(bib, expected_key="k1")
 
 
 def test_every_arxiv_fallback_entry_parses_back(monkeypatch):
     curl(monkeypatch, {"arxiv.org/abs": _ABS_PAGE})
-    assert ra.is_wellformed_entry(ra.fetch_arxiv_bib("2401.00001", "k1"),
+    assert is_wellformed_entry(ra.fetch_arxiv_bib("2401.00001", "k1"),
                                   expected_key="k1")
 
 
-# ── writing back ─────────────────────────────────────────────────────────────
+# ── the CLI ──────────────────────────────────────────────────────────────────
 
 _EXISTING = """@misc{k1,
   title = {A Paper},
@@ -685,80 +686,6 @@ _EXISTING = """@misc{k1,
 }
 """
 
-
-def test_bibtex_that_does_not_parse_back_is_refused(capsys):
-    """An unbalanced brace written verbatim takes the remainder of the file with
-    it, so one bad response would cost every entry after it."""
-    text, replaced, _ = ra.update_bib_inplace(
-        _EXISTING, [("k1", "@article{k1, title = {Unbalanced {oops}", "DBLP")], [])
-    assert replaced == 0
-    assert text == _EXISTING
-    assert "[rejected]" in capsys.readouterr().err
-
-
-def test_a_lower_ranked_result_never_replaces_a_better_entry(capsys):
-    """The source label says where a result came from, not how good it is: DBLP
-    can return a workshop @misc for a paper whose existing entry is the
-    @inproceedings version of record."""
-    existing = "@inproceedings{k1,\n  title = {A Paper},\n  booktitle = {ACL},\n" \
-               "  year = {2024}\n}\n"
-    _text, replaced, _ = ra.update_bib_inplace(
-        existing,
-        [("k1", "@misc{k1,\n  title = {A Paper},\n  year = {2024}\n}", "DBLP")], [])
-    assert replaced == 0
-    assert "[keep existing]" in capsys.readouterr().err
-
-
-def test_a_key_the_file_does_not_have_is_skipped():
-    _text, replaced, _ = ra.update_bib_inplace(
-        _EXISTING,
-        [("absent", "@article{absent,\n  title = {X},\n  journal = {J}\n}", "DBLP")], [])
-    assert replaced == 0
-
-
-def test_a_result_identical_to_what_is_there_is_not_a_change():
-    """Otherwise every run rewrites orig.bib, and the diff that should show real
-    upgrades shows noise instead."""
-    _text, replaced, _ = ra.update_bib_inplace(
-        _EXISTING, [("k1", _EXISTING.strip(), "DBLP")], [])
-    assert replaced == 0
-
-
-def test_an_appended_entry_that_does_not_parse_is_refused(capsys):
-    text, _, appended = ra.update_bib_inplace(
-        _EXISTING, [], [("new", "@article{new, title = {Broken {")])
-    assert appended == 0
-    assert text == _EXISTING
-    assert "not appended" in capsys.readouterr().err
-
-
-def test_appending_and_replacing_are_counted_separately():
-    text, replaced, appended = ra.update_bib_inplace(
-        _EXISTING,
-        [("k1", "@inproceedings{k1,\n  title = {A Paper},\n  booktitle = {ACL},\n"
-                "  year = {2024}\n}", "DBLP")],
-        [("new", "@article{new,\n  title = {Another},\n  journal = {J},\n"
-                 "  year = {2024}\n}")])
-    assert (replaced, appended) == (1, 1)
-    # extract_field, not a substring: merge_published pads field names to a
-    # column, so the merged line reads `booktitle     = {ACL}`.
-    assert ra.extract_field(text, "booktitle") == "ACL"
-    assert "@article{new," in text
-
-
-# ── missing-entry discovery ──────────────────────────────────────────────────
-
-def test_an_unreadable_table_is_a_warning_not_a_crash(monkeypatch, capsys):
-    """resolve_arxiv also runs standalone, where an Excel file open in Excel is
-    a normal condition rather than a reason to fail."""
-    def _boom():
-        raise OSError("papers.csv is locked")
-    monkeypatch.setattr(ra, "read_df", _boom)
-    assert ra.get_missing_bib_entries("") == []
-    assert "could not read the publications table" in capsys.readouterr().err
-
-
-# ── the CLI ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
@@ -794,9 +721,9 @@ def test_in_place_upgrades_the_preprint_entry(cli, capsys):
     _tmp, bib, out = cli
     ra.main(["--bib", bib, "--output", out, "--in-place"])
     text = open(bib).read()
-    assert ra.extract_field(text, "booktitle") == "ACL"
+    assert extract_field(text, "booktitle") == "ACL"
     assert "1 entries upgraded in place" in capsys.readouterr().out
-    assert ra.extract_field(text, "title") == "A Paper", (
+    assert extract_field(text, "title") == "A Paper", (
         "the curated title is not the source's to change")
 
 

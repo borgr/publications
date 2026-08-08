@@ -24,6 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import build_bib
+from bib_edit import get_missing_bib_entries
 from bib_utils import find_duplicate_keys, parse_bibtex, read_df
 from citations_io import read_citation_rows
 from identity import (
@@ -32,7 +33,7 @@ from identity import (
     find_duplicate_titles,
     join_citations,
 )
-from resolve_arxiv import get_missing_bib_entries, load_attempts
+from resolve_arxiv import load_attempts
 from venues import Venues
 
 WORKLIST_PATH = os.path.join(ROOT, "WORKLIST.md")

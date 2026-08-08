@@ -251,10 +251,11 @@ reformats a column produces a table that still builds, just wrongly.
 | `table_io.py` | Reads/validates/writes `papers.csv`, by column name. |
 | `identity.py` | Stable identifiers, and the joins built on them. |
 | `citations_io.py` | `citations.csv` reading and writing. |
-| `resolve_arxiv.py` | arXiv → published BibTeX, via DBLP / S2 / ACL / OpenReview / DOI / OpenAlex. |
+| `resolve_arxiv.py` | arXiv → published BibTeX, via DBLP / S2 / ACL / OpenReview / DOI / OpenAlex. Finds candidates; writes nothing. |
+| `bib_edit.py` | Decides what may change in `orig.bib` and writes it: keys, the venue transplant, the in-place update. |
 | `build_bib.py` | Builds `Wzmn.bib` and assigns each paper to a CV section. |
 | `rebuild_tex.py` | Updates `main.tex` in place. |
-| `bib_utils.py` | Brace-counting BibTeX parser, text normalization, publication ranking. |
+| `bib_utils.py` | Brace-counting BibTeX parser, text normalization, publication ranking. Reads only. |
 | `venues.py` | Loads `venues.yaml`. |
 | `pipeline_state.py` | Content-hash step skipping. |
 | `notify.py` | Failure notification (macOS Notification Center, Actions annotation). |

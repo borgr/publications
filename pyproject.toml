@@ -47,7 +47,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = [
-    "bib_utils", "build_bib", "citations_io", "config", "fetch_citations",
+    "bib_edit", "bib_utils", "build_bib", "citations_io", "config", "fetch_citations",
     "identity", "init_new_author", "notify", "pipeline_state", "rebuild_tex",
     "resolve_arxiv", "table_io", "update", "venues",
 ]

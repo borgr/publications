@@ -36,6 +36,13 @@ sys.path.insert(0, FILE_DIR)
 
 import notify
 import overleaf_auth
+from bib_edit import (
+    _PUBLISHED_SOURCES,
+    _get_arxiv_id,
+    get_arxiv_entries,
+    get_missing_bib_entries,
+    update_bib_inplace,
+)
 from bib_utils import extract_field, parse_bibtex
 from build_bib import simplify_venue
 from citations_io import read_citation_rows
@@ -49,15 +56,10 @@ from identity import (
 from pipeline_state import AlreadyRunning, PipelineState, RunLock
 from resolve_arxiv import (
     _DEPRIORITIZE_AFTER,
-    _PUBLISHED_SOURCES,
-    _get_arxiv_id,
-    get_arxiv_entries,
-    get_missing_bib_entries,
     load_attempts,
     resolve,
     save_attempts,
     sort_by_attempts,
-    update_bib_inplace,
 )
 from table_io import (
     CSV_PATH,
