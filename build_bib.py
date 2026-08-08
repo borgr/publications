@@ -258,7 +258,7 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
             continue
         matches = df[df["Bib"] == dic["item_name"]]
         if matches.shape[0] > 1:
-            print(f"Warning: duplicate xlsx rows for bib key {dic['item_name']!r}, using first")
+            print(f"Warning: duplicate table rows for bib key {dic['item_name']!r}, using first")
             matches = matches.iloc[:1]
         if matches.empty:
             continue
@@ -324,15 +324,15 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
 
 
 def _check_coverage(parsed, df, bibs_seen):
-    """Warn about xlsx rows whose bib key is absent from orig.bib."""
+    """Warn about table rows whose bib key is absent from orig.bib."""
     bib_keys_in_orig = {d["item_name"] for d in parsed}
     real_bib = df["Bib"].notna() & ~df["Bib"].str.lower().isin(("nan", "none", ""))
     df_with_bib = df[real_bib]
     if bibs_seen != len(df_with_bib):
-        print(f"Warning: matched {bibs_seen} bib entries but {len(df_with_bib)} xlsx rows have a Bib key")
+        print(f"Warning: matched {bibs_seen} bib entries but {len(df_with_bib)} table rows have a Bib key")
         unmatched = df_with_bib[~df_with_bib["Bib"].isin(bib_keys_in_orig)]
         if not unmatched.empty:
-            print("  xlsx rows whose Bib key is absent from orig.bib:")
+            print("  table rows whose Bib key is absent from orig.bib:")
             for _, r in unmatched.iterrows():
                 print(f"    {r['Bib']!r:40s}  {str(r['Name'])[:60]}")
 

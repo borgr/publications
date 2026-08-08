@@ -30,8 +30,8 @@ def read_df():
     """Load the publications table.
 
     Kept as a thin alias so existing callers and any external scripts keep
-    working; the implementation lives in table_io, which prefers papers.csv and
-    falls back to the xlsx. Validation problems are reported rather than raised,
+    working; the implementation lives in table_io, which reads papers.csv.
+    Validation problems are reported rather than raised,
     because a slightly untidy table should still build a CV -- the problems are
     collected into WORKLIST.md.
     """

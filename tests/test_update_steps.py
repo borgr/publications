@@ -690,7 +690,7 @@ def test_nothing_to_commit_is_still_a_success(repos, capsys):
 
 def test_a_file_that_does_not_exist_is_skipped(repos):
     """The file lists are the same for every fork, and a fork legitimately lacks
-    some of them -- Contributions_table.xlsx, or venues.yaml before first run.
+    some of them -- venues.yaml, before the first run creates it.
     `git add` on a missing path fails and would take the whole push with it."""
     work, _remote = repos
     (work / "tracked.txt").write_text("two\n")

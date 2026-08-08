@@ -9,9 +9,9 @@
 % The pipeline (update.py in the GitHub repo) keeps it up to date
 % automatically:
 %   1. Scrapes Google Scholar → citations.csv + profile_stats.json
-%   2. Syncs new papers into Contributions_table.xlsx
+%   2. Syncs new papers into papers.csv
 %   3. Resolves arXiv entries to published BibTeX in orig.bib
-%   4. Builds Wzmn.bib from orig.bib + xlsx metadata
+%   4. Builds Wzmn.bib from orig.bib + papers.csv metadata
 %   5. Rewrites \nocite{} blocks and the Citations/h-index line in main.tex
 %   6. Commits and pushes to this Overleaf project and to GitHub
 %
@@ -23,7 +23,7 @@
 %    The pipeline rewrites the BST files and this document's header
 %    automatically on each run.
 %
-% 3. Contributions_table.xlsx: the source of truth for paper metadata
+% 3. papers.csv: the source of truth for paper metadata
 %    (venue, authors, year, bib key, category flags).  Add new papers
 %    there; the pipeline will pick them up on the next run.
 %

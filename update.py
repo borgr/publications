@@ -19,7 +19,7 @@ fail silently while the CV keeps looking current.
 
 Usage:
     python update.py [--dry-run] [--force] [--no-push] [--no-notify]
-                     [--skip-fetch] [--skip-xlsx] [--skip-resolve] [--skip-publications]
+                     [--skip-fetch] [--skip-new] [--skip-resolve] [--skip-publications]
                      [--skip-tex] [--fetch-age HOURS] [--user SCHOLAR_USER_ID]
 """
 
@@ -61,7 +61,6 @@ from resolve_arxiv import (
 )
 from table_io import (
     CSV_PATH,
-    XLSX_PATH,
     append_rows,
     fill_blanks,
     read_table,
@@ -71,8 +70,7 @@ from table_io import (
 from venues import Venues
 
 CITATIONS_CSV = os.path.join(FILE_DIR, "citations.csv")
-# The table is papers.csv once migrated, the xlsx before that.
-TABLE_PATH    = CSV_PATH if os.path.exists(CSV_PATH) else XLSX_PATH
+TABLE_PATH    = CSV_PATH
 BIB_PATH      = os.path.join(FILE_DIR, "orig.bib")
 STATS_PATH    = os.path.join(FILE_DIR, "profile_stats.json")
 VENUES_PATH   = os.path.join(FILE_DIR, "venues.yaml")
@@ -141,8 +139,7 @@ def preflight() -> list:
         problems.append("git is not on PATH, so step 7 cannot push.")
     if not os.path.exists(TABLE_PATH):
         problems.append(f"No publications table: expected "
-                        f"{os.path.basename(CSV_PATH)} or "
-                        f"{os.path.basename(XLSX_PATH)}.")
+                        f"{os.path.basename(CSV_PATH)}.")
     if not os.path.exists(BIB_PATH):
         problems.append("orig.bib is missing.")
 
@@ -411,7 +408,7 @@ def step3_resolve(dry_run: bool) -> tuple:
     new_entries = []
     not_found = []
     if missing_entries:
-        print(f"\n  {len(missing_entries)} xlsx entry(ies) with no BibTeX key...")
+        print(f"\n  {len(missing_entries)} table row(s) with no BibTeX key...")
     for i, entry in enumerate(missing_entries, 1):
         key = entry["item_name"]
         print(f"    [{key:<40}]", end=" ", flush=True)
@@ -494,7 +491,6 @@ def step5_rebuild_tex(dry_run: bool, cats) -> None:
 _OUTER_FILES = [
     "citations.csv",
     "profile_stats.json",
-    "Contributions_table.xlsx",
     "papers.csv",
     "orig.bib",
     "identity.json",
@@ -638,7 +634,7 @@ Companion commands, none needed routinely:
     parser.add_argument("--fetch-age", type=float, default=24.0, metavar="HOURS",
                         help="Re-fetch citations.csv if older than this many hours (default: 24)")
     parser.add_argument("--skip-fetch",        action="store_true", help="Skip step 1")
-    parser.add_argument("--skip-xlsx",         action="store_true", help="Skip step 2")
+    parser.add_argument("--skip-new",          action="store_true", help="Skip step 2")
     parser.add_argument("--skip-resolve",      action="store_true", help="Skip step 3")
     parser.add_argument("--skip-publications", action="store_true", help="Skip step 4")
     parser.add_argument("--skip-tex",          action="store_true", help="Skip step 5")
@@ -705,7 +701,7 @@ Companion commands, none needed routinely:
             state.save()
 
     # Step 2 — cheap and idempotent, so it always runs unless explicitly skipped.
-    if args.skip_xlsx:
+    if args.skip_new:
         print("\n[Step 2] Skipped.")
     else:
         n_added = step2_add_new_papers(args.dry_run)

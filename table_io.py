@@ -1,29 +1,13 @@
 """The publications table: read, validate, write.
 
-Format
-------
-`papers.csv` -- one row per paper, one column per field, UTF-8. It replaces
-`Contributions_table.xlsx`, which caused three recurring problems:
+`papers.csv` -- one row per paper, one column per field, UTF-8, and the only
+format read. Everything here addresses columns by *header name*, so inserting or
+reordering a column cannot misfile a value.
 
-  * Binary, so git could not diff it. Columns rotted invisibly: six were
-    entirely empty when this migration ran, two of them duplicate headers, and
-    one of those (`inter\\eval`) is read by build_bib to emit the \\UND tag --
-    which therefore had never been emitted.
-  * Addressed by *position* (`COL_PAPER = 26`, `row_data = [None] * 37`), so
-    inserting a column silently wrote values into the wrong fields.
-  * Excel holds an exclusive lock. Running the pipeline with the file open in
-    Excel meant `wb.save()` fought the editor.
-
-CSV keeps the spreadsheet workflow -- it opens in Excel, Numbers and
-LibreOffice, and a wide grid of tag flags is still ticked across a row -- while
-being diffable and addressable by header name.
-
-The Excel risk that remains is round-trip mangling: Excel likes to add a BOM,
-reformat numbers and coerce things to dates. `validate()` exists to make that
-loud instead of silent, and runs on every load.
-
-Migration is one-way but not destructive: `read_table()` prefers papers.csv and
-falls back to the xlsx, so a fork that has not migrated keeps working.
+It is edited by hand in Excel, Numbers or LibreOffice, which is what `validate()`
+is for: a spreadsheet round-trip adds a BOM, reformats numbers and coerces cells
+to dates, and the result still parses and still builds a CV -- just a wrong one.
+So it runs on every load rather than on request.
 """
 
 import csv
@@ -36,7 +20,6 @@ from identity import find_duplicate_titles
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(FILE_DIR, "papers.csv")
-XLSX_PATH = os.path.join(FILE_DIR, "Contributions_table.xlsx")
 
 # Columns the pipeline reads by name. Missing any of these is fatal -- the
 # alternative is silently producing a CV with no venues or no tags.
@@ -72,20 +55,13 @@ def _clean(value):
     return text
 
 
-def read_table(path=None, prefer_csv=True):
+def read_table(path=None):
     """Load the publications table as a DataFrame.
 
-    Prefers papers.csv, falling back to the xlsx so an unmigrated checkout still
-    builds. Rows with no Name are dropped and the frame is sorted by publication
-    order, matching the previous `read_df()` behaviour exactly.
+    Rows with no Name are dropped and the frame is sorted by publication order.
     """
-    if path:
-        df = (pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[""])
-              if str(path).endswith(".csv") else pd.read_excel(path))
-    elif prefer_csv and os.path.exists(CSV_PATH):
-        df = pd.read_csv(CSV_PATH, dtype=str, keep_default_na=False, na_values=[""])
-    else:
-        df = pd.read_excel(XLSX_PATH)
+    df = pd.read_csv(path or CSV_PATH, dtype=str,
+                     keep_default_na=False, na_values=[""])
 
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:

@@ -182,7 +182,7 @@ def test_duplicate_table_rows_for_one_key_warn_and_use_the_first(capsys):
                {"Name": "Second Spelling", "Bib": "p1", "Venue": "TACL"})
     _, cats, seen, _, _ = build_bib._process_entries(
         parse_bibtex(bib(("p1", ""))), df, {})
-    assert "duplicate xlsx rows" in capsys.readouterr().out
+    assert "duplicate table rows" in capsys.readouterr().out
     assert seen == 1 and cats.conferences == ["p1"]
 
 

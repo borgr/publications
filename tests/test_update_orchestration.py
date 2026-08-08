@@ -143,7 +143,7 @@ def test_a_changed_input_un_skips_the_step(h):
 
 @pytest.mark.parametrize("flag, step", [
     ("--skip-fetch",        "step1_fetch"),
-    ("--skip-xlsx",         "step2_add_new_papers"),
+    ("--skip-new",          "step2_add_new_papers"),
     ("--skip-resolve",      "step3_resolve"),
     ("--skip-publications", "step4_build_bib"),
     ("--skip-tex",          "step5_rebuild_tex"),

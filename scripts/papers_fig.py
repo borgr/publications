@@ -50,12 +50,10 @@ def smooth_line(x, y, smoothing_factor=1, num_points=200):
 # Smoothing factor (adjust this to control smoothness)
 smoothing_factor = 5  # Higher values = more smoothing
 
-# Read the XLS file
+# Read the publications table
 
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# papers.csv, not Contributions_table.xlsx: the xlsx is a legacy fallback that
-# nothing writes any more, so it plots whatever the table said before migration.
 df = pd.read_csv(os.path.join(ROOT, 'papers.csv'))
 lines = ['Resources', 'The Science of\nDeep Learning', 'Methods', 'Dataset', 'Training',
          'Evaluation', r'Shared-task\effort', 'Language&Cognition', 'Open',

@@ -66,7 +66,7 @@ python -m pytest tests/ -q          # the test suite
 python scripts/install_schedule.py       # weekly local run (macOS launchd)
 python scripts/install_schedule.py --show  # print the plist / cron line instead
 python scripts/install_overleaf_credential.py  # store the Overleaf git token, so step 7 can push
-python scripts/migrate_to_csv.py         # only if you still have the .xlsx
+
 python init_new_author.py                # wipe personal data, for a fork
 ```
 
@@ -237,10 +237,10 @@ browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
 identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
 `WORKLIST.md`, `overleaf/Wzmn.bib`.
 
-`Contributions_table.xlsx` is **legacy**. `papers.csv` is the source of truth;
-`table_io.py` falls back to the xlsx only so a fork that has not run
-`scripts/migrate_to_csv.py` still works. Nothing writes it, so it drifts behind
-every run — read `papers.csv`.
+`papers.csv` is the only table format. `table_io.py` addresses every column by
+header name — so inserting or reordering one cannot misfile a value — and
+validates the whole table on every load, because a spreadsheet round-trip that
+reformats a column produces a table that still builds, just wrongly.
 
 ### Code
 

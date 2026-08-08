@@ -92,7 +92,7 @@ def overleaf_remote(tmp_path):
 # --- wiping personal data ------------------------------------------------
 
 def test_the_table_is_emptied_but_keeps_its_columns(fork):
-    ina.wipe_contributions_xlsx(root=str(fork))
+    ina.wipe_papers_table(root=str(fork))
     text = (fork / "papers.csv").read_text()
     assert "Title" in text and "bibkey" in text
     assert "A Paper" not in text
@@ -126,7 +126,7 @@ def test_no_personal_file_survives_a_full_wipe(fork):
     ina.wipe_wzmn_bib(root=str(fork))
     ina.wipe_tmp_csv(root=str(fork))
     ina.wipe_resolve_attempts(root=str(fork))
-    ina.wipe_contributions_xlsx(root=str(fork))
+    ina.wipe_papers_table(root=str(fork))
 
     survivors = []
     for name, _ in ina.PERSONAL_FILES:

@@ -1089,7 +1089,7 @@ def main(argv=None) -> None:
     parser.add_argument("--bib", default=DEFAULT_BIB)
     parser.add_argument("--output", default=DEFAULT_OUTPUT)
     parser.add_argument("--skip-missing", action="store_true",
-                        help="Only process arXiv entries; skip xlsx entries with no key")
+                        help="Only process arXiv entries; skip table rows with no key")
     parser.add_argument("--in-place", action="store_true",
                         help="also write the published venues back into --bib "
                              "(title, author and pretitle are left alone; diff it)")
@@ -1114,7 +1114,7 @@ def main(argv=None) -> None:
 
     print(f"Found {len(arxiv_entries)} arXiv entries in {os.path.basename(args.bib)}")
     if not args.skip_missing:
-        print(f"Found {len(missing_entries)} xlsx entries with no BibTeX")
+        print(f"Found {len(missing_entries)} table rows with no BibTeX")
     n_deprio = sum(1 for e in candidates if attempts.get(e["item_name"], 0) >= _DEPRIORITIZE_AFTER)
     if n_deprio:
         print(f"  ({n_deprio} entries with ≥{_DEPRIORITIZE_AFTER} prior attempts sorted last)")

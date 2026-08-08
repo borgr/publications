@@ -47,8 +47,6 @@ PERSONAL_FILES = (
 _DELETED_OUTRIGHT = ("resolve_attempts.json", "identity.json",
                      ".pipeline_state.json", "WORKLIST.md", "tmp.csv")
 
-XLSX_NAME = "Contributions_table.xlsx"
-
 # Preferred first. templates/main.tex is tracked in this repository; the
 # submodule copy is only reachable while overleaf/ still points at the original
 # author's project, which stops being true the moment a fork repoints it.
@@ -107,11 +105,11 @@ def wipe_resolve_attempts(root=None):
             print(f"  Deleted {name}")
 
 
-def wipe_contributions_xlsx(root=None):
+def wipe_papers_table(root=None):
     """Empty the publications table, keeping its columns.
 
-    Handles both formats: papers.csv is the current source of truth, and the
-    xlsx is cleared too so a fork that has not migrated starts clean either way.
+    The columns are the schema: build_bib reads the tag flags by header name, so
+    a fork that lost them would build a CV with no tags rather than fail.
     """
     root = root or FILE_DIR
     papers_csv = os.path.join(root, "papers.csv")
@@ -122,16 +120,6 @@ def wipe_contributions_xlsx(root=None):
         df = pd.read_csv(papers_csv, dtype=str, nrows=0)
         write_table(df, papers_csv)
         print("  Cleared papers.csv (columns preserved)")
-
-    xlsx_path = os.path.join(root, XLSX_NAME)
-    if os.path.exists(xlsx_path):
-        import openpyxl
-        wb = openpyxl.load_workbook(xlsx_path)
-        ws = wb.active
-        if ws.max_row > 1:
-            ws.delete_rows(2, ws.max_row - 1)
-        wb.save(xlsx_path)
-        print(f"  Cleared {XLSX_NAME} (header row preserved)")
 
 
 def find_template(root=None):
@@ -243,7 +231,7 @@ def main(argv=None):
     wipe_wzmn_bib()
     wipe_tmp_csv()
     wipe_resolve_attempts()
-    wipe_contributions_xlsx()
+    wipe_papers_table()
 
     # The submodule swap first: it deletes overleaf/ and re-clones the new
     # project over it, so a main.tex written before it does not survive. A new

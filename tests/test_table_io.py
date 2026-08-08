@@ -1,8 +1,8 @@
 """The publications table: schema validation and name-addressed writes.
 
-The validator exists because of the one real risk the CSV migration introduces:
-Excel silently reformatting a column on save. A mangled table still parses and
-still builds -- just wrongly -- so it has to be checked, not trusted.
+The validator's job is Excel silently reformatting a column on save. A mangled
+table still parses and still builds -- just wrongly -- so it has to be checked,
+not trusted.
 """
 
 import os
@@ -331,28 +331,26 @@ def test_live_table_loads_and_has_the_required_columns():
         assert column in df.columns
 
 
-def test_bib_keys_never_change_for_a_paper_in_both_formats():
-    """A paper's BibTeX key must be stable across the migration.
+def test_every_key_in_the_table_resolves_to_an_entry():
+    """A row's Bib key must name an entry that exists.
 
-    Deliberately *not* a subset check on rows. papers.csv legitimately diverges
-    from the xlsx in both directions during normal operation -- dedupe.py removes
-    duplicate rows, and step 2 adds papers Scholar has published since the
-    migration -- so asserting containment would fail on the first real run. What
-    must never drift is a paper's key, because orig.bib and identity.json are
-    both keyed on it.
+    orig.bib and identity.json are both keyed on this string, so a row pointing at
+    a key nothing defines produces a CV with a silently absent paper. build_bib
+    only warns, and a warning in a weekly unattended log is not a guard.
+
+    A row with no key at all is a different state -- a paper step 3 has not
+    resolved yet -- and is WORKLIST.md's business.
     """
-    if not os.path.exists(table_io.CSV_PATH) or not os.path.exists(table_io.XLSX_PATH):
-        pytest.skip("both formats not present")
-    from identity import normalize_title
+    from bib_utils import parse_bibtex
+    with open(os.path.join(table_io.FILE_DIR, "orig.bib"), encoding="utf-8") as fh:
+        defined = {e["item_name"] for e in parse_bibtex(fh.read())}
 
-    from_csv = read_table()
-    from_xlsx = read_table(prefer_csv=False)
-    csv_keys = {normalize_title(n): (k or "") for n, k in
-                zip(from_csv["Name"], from_csv["Bib"].fillna(""))}
-    xlsx_keys = {normalize_title(n): (k or "") for n, k in
-                 zip(from_xlsx["Name"], from_xlsx["Bib"].fillna(""))}
-
-    shared = [t for t in csv_keys if t in xlsx_keys and csv_keys[t] and xlsx_keys[t]]
-    assert shared, "expected papers present in both formats"
-    for title in shared:
-        assert csv_keys[title] == xlsx_keys[title], f"key changed for {title}"
+    df = read_table()
+    rows = ((name, str(raw).strip())
+            for name, raw in zip(df["Name"], df["Bib"].fillna("")))
+    dangling = sorted(
+        f"{key} (row {name!r})" for name, key in rows
+        if key and key.lower() not in ("nan", "none") and key not in defined)
+    assert not dangling, (
+        "table rows name BibTeX keys that orig.bib does not define:\n  "
+        + "\n  ".join(dangling))
