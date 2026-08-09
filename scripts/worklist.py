@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Generate WORKLIST.md: everything the pipeline cannot decide on its own.
 
-Run standalone -- it re-reads the data files and needs no network, so the
-worklist can be regenerated at any time:
+Run standalone -- it re-reads the data files, so the worklist can be regenerated
+at any time. The only network it uses is one `git fetch` of the Overleaf remote,
+to tell output that has not been published from output that CI published while
+this clone was not looking; that fetch is optional and failing it changes
+nothing but the freshness of that one section:
 
     python scripts/worklist.py
     python scripts/worklist.py --check    # exit 1 if anything is open (for CI)
@@ -79,6 +82,43 @@ def _git(repo, *args):
     return result.stdout if result.returncode == 0 else None
 
 
+def _differs_from_remote():
+    """Which published files the Overleaf remote does not already have verbatim.
+
+    Returns every published file when there is nothing to compare against -- no
+    upstream, or git could not run -- so an unknown remote degrades to reporting
+    the local state rather than to reporting nothing at all.
+    """
+    diff = _git(OVERLEAF_DIR, "diff", "--name-only", "@{upstream}",
+                "--", *_PUBLISHED_FILES)
+    if diff is None:
+        return set(_PUBLISHED_FILES)
+    # An untracked file is on no remote by definition, and `git diff` cannot see
+    # one: the state of a fresh fork whose project has no Wzmn.bib yet.
+    untracked = _git(OVERLEAF_DIR, "ls-files", "--others", "--exclude-standard",
+                     "--", *_PUBLISHED_FILES) or ""
+    return set(diff.split()) | set(untracked.split())
+
+
+def _refresh_remote_ref():
+    """Update what we know of the Overleaf remote, so the comparison below is
+    against what it serves now and not against the last time anyone pushed.
+
+    Best-effort on purpose. No credential, no network, no submodule and no
+    upstream all mean "compare against what is already known" rather than
+    "fail" -- the worklist has to be regeneratable offline. GIT_TERMINAL_PROMPT=0
+    so a missing credential cannot turn this into a password prompt nobody is
+    there to answer.
+    """
+    import subprocess
+    try:
+        subprocess.run(["git", "-C", OVERLEAF_DIR, "fetch", "--quiet", "origin"],
+                       capture_output=True, timeout=30,
+                       env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def _unpublished_output():
     """Report generated output that exists locally but has not reached Overleaf.
 
@@ -88,12 +128,17 @@ def _unpublished_output():
     previous version. Nothing anywhere said so -- the run reported success,
     because generating the files *was* the success.
 
-    Compares the working tree against the Overleaf remote rather than trusting
-    that a push happened.
+    What matters is whether Overleaf serves these bytes, which is not the same
+    question as whether this checkout has committed them. CI can publish too, and
+    then the answers diverge: the local clone falls a commit behind with files
+    that are byte-identical to what Overleaf already compiles. Asked about the
+    local HEAD, that reads as two unpublished files, on every run, and no amount
+    of pushing clears it -- a section that cries wolf until it gets ignored.
     """
     out = []
     if not os.path.isdir(OVERLEAF_DIR):
         return out
+    _refresh_remote_ref()
 
     dirty = _git(OVERLEAF_DIR, "status", "--porcelain", "--", *_PUBLISHED_FILES)
     # Porcelain lines are `XY <path>`, where X or Y may be a space. Splitting the
@@ -101,6 +146,7 @@ def _unpublished_output():
     # and shifts the path by one, which produced "overleaf/ain.tex".
     changed = [line[3:].split(" -> ")[-1].strip()
                for line in (dirty or "").splitlines() if line.strip()]
+    changed = [p for p in changed if p in _differs_from_remote()]
     if changed:
         out.append((
             f"CV output built but not committed ({len(changed)})",

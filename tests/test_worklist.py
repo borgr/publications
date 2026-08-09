@@ -246,8 +246,11 @@ def test_uncommitted_cv_output_is_reported(wl, monkeypatch):
     overleaf = wl / "overleaf"
     overleaf.mkdir()
     monkeypatch.setattr(worklist, "OVERLEAF_DIR", str(overleaf))
+    # Uncommitted *and* not what the remote holds: both, because either alone is
+    # not a reason to report a file. `diff` is how the second is asked.
     monkeypatch.setattr(worklist, "_git", lambda repo, *args:
-                        " M main.tex\n" if args[0] == "status" else "")
+                        {"status": " M main.tex\n",
+                         "diff": "main.tex\n"}.get(args[0], ""))
     section = only(worklist.gather()[0])
     assert "built but not committed" in section.title
     assert section.lines == ["- `overleaf/main.tex` has uncommitted changes"], (
