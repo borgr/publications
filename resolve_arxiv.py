@@ -69,6 +69,10 @@ ATTEMPTS_PATH  = os.path.join(FILE_DIR, "resolve_attempts.json")
 # They still run (not skipped), but fresh entries get S2 quota first.
 _DEPRIORITIZE_AFTER = 5
 
+# The source label for "nothing was found, but a source we needed was silent".
+# Distinct from "not found", which is a real negative answer from every source.
+UNANSWERED = "unknown (a source did not reply)"
+
 _CURL_FLAGS = [
     "--silent", "--compressed", "--max-time", "20",
     "-A", "resolve-arxiv-bib/1.0",
@@ -78,13 +82,76 @@ _CURL_FLAGS = [
 
 
 # ── HTTP helpers ──────────────────────────────────────────────────────────────
+#
+# A request that failed is not an answer.
+#
+# Everything below distinguishes "the source says this paper is not published"
+# from "the source did not reply", because conflating them silently downgrades a
+# paper: DBLP rate-limited a long run, `_curl_get` returned "" for the refusal,
+# `search_dblp` read that as zero hits, and an ACL 2026 paper DBLP knows about was
+# re-resolved to `OpenAlex (preprint)` and cited in the CV as a preprint. Nothing
+# was logged, because from the resolver's point of view nothing went wrong.
+#
+# Unanswered requests are counted so the caller can refuse to record a negative:
+# step 3 neither burns a retry counter nor marks itself done when a source it
+# needed never replied, so the next run asks again.
+_net_state = {"unanswered": 0}
 
-def _curl_get(url: str) -> str:
-    result = subprocess.run(
-        ["curl", *_CURL_FLAGS, url],
-        capture_output=True, text=True, timeout=30,
-    )
-    return result.stdout if result.returncode == 0 else ""
+_CURL_TRIES = 3
+_CURL_BACKOFF_SECONDS = 2.0
+
+
+def unanswered_lookups() -> int:
+    """How many requests got no usable reply since the last reset."""
+    return _net_state["unanswered"]
+
+
+def reset_unanswered_lookups() -> None:
+    _net_state["unanswered"] = 0
+
+
+def _note_unanswered(what: str) -> None:
+    _net_state["unanswered"] += 1
+    print(f"\n    {what} did not reply — treating the answer as unknown, "
+          f"not as 'unpublished'", end="", flush=True)
+
+
+def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
+    """GET a URL's body, or None when the request could not be answered.
+
+    None and "" mean different things and callers must keep them apart: "" is a
+    source that replied that it has nothing (DBLP answers a no-hit title search
+    with an empty 200), None is a source that did not reply at all. Only the
+    first is evidence about the paper.
+
+    `accept` is an optional predicate deciding whether a body counts as a reply.
+    It exists because a refusal can arrive wearing an answer's clothes: DBLP
+    serves an HTML error page, with status 200, when it is rate-limiting.
+    """
+    for attempt in range(tries):
+        replied, body = False, ""
+        try:
+            result = subprocess.run(
+                ["curl", *_CURL_FLAGS, url],
+                capture_output=True, text=True, timeout=30,
+            )
+            replied, body = result.returncode == 0, result.stdout
+        except (OSError, subprocess.SubprocessError):
+            pass
+        # An empty body from a successful request is an answer: the source has
+        # nothing. Retrying it would cost three requests and six seconds for
+        # every paper no source indexes yet.
+        if replied and (not body or accept is None or accept(body)):
+            return body
+        if attempt < tries - 1:
+            time.sleep(_CURL_BACKOFF_SECONDS * (attempt + 1))
+    _note_unanswered(_host_of(url))
+    return None
+
+
+def _host_of(url: str) -> str:
+    m = re.match(r'https?://([^/]+)', url)
+    return m.group(1) if m else url
 
 
 # Semantic Scholar rate limits, per its own documentation:
@@ -130,8 +197,15 @@ def s2_available() -> bool:
 
 
 def _http_get_json(url: str, retries: int = 2) -> dict | None:
-    """GET JSON, pausing a rate-limited source rather than abandoning it."""
+    """GET JSON, pausing a rate-limited source rather than abandoning it.
+
+    None is always "no answer", never "no such paper", and is counted as such --
+    including the cooldown case, where the request is not even attempted. Since
+    the ACL Anthology and OpenReview are both reached through S2, a cooldown
+    means three sources are silent rather than one.
+    """
     if not s2_available():
+        _note_unanswered(f"{_host_of(url)} (in cooldown)")
         return None
     headers = {"User-Agent": "resolve-arxiv-bib/1.0"}
     key = s2_api_key()
@@ -152,9 +226,11 @@ def _http_get_json(url: str, retries: int = 2) -> dict | None:
                 _s2_state["blocked_until"] = time.time() + _S2_COOLDOWN_SECONDS
                 print(f"\n    S2 still rate-limited — pausing it for "
                       f"{_S2_COOLDOWN_SECONDS}s", end="", flush=True)
+                _note_unanswered(_host_of(url))
                 return None
             if attempt == retries - 1:
                 print(f"\n    HTTP error ({exc})", file=sys.stderr, end="")
+                _note_unanswered(_host_of(url))
                 return None
             time.sleep(3)
     return None
@@ -219,12 +295,19 @@ def _extract_openreview_id(text: str) -> str | None:
 
 # ── DBLP ──────────────────────────────────────────────────────────────────────
 
-def search_dblp(title: str) -> list[str]:
-    """Search DBLP by title, return list of BibTeX strings (up to 5)."""
+def search_dblp(title: str) -> list[str] | None:
+    """Search DBLP by title. Returns up to 5 BibTeX strings, or None if it did not reply.
+
+    `[]` means DBLP has no record of this paper -- it answers a no-hit search
+    with an empty body. `None` means DBLP refused to answer, which says nothing
+    about the paper and must not be read as `[]`.
+    """
     url = f"https://dblp.org/search/publ/api?q={quote(title)}&format=bib&h=5"
-    raw = _curl_get(url)
-    if not raw or raw.strip().startswith("<"):
-        return []
+    # An HTML body is DBLP's rate-limit page, served with status 200. Rejecting it
+    # here makes _curl_get retry it and, if it persists, report no answer.
+    raw = _curl_get(url, accept=lambda body: not body.lstrip().startswith("<"))
+    if raw is None:
+        return None
     entries = re.split(r'\n(?=@)', raw.strip())
     return [e.strip() for e in entries if e.strip().startswith("@")]
 
@@ -605,6 +688,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     later runs match on an identifier instead of guessing from a title.
     """
     corr_bib = None
+    unanswered_before = unanswered_lookups()
 
     def _remember(**ids):
         if store is not None:
@@ -627,14 +711,17 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     year_m = (re.search(r'\byear\s*=\s*\{?\s*(\d{4})', existing_content)
               or re.search(r'\b(20\d{2})\b', existing_content))
 
-    # Step 1 — DBLP title search
+    # Step 1 — DBLP title search. `None` is "DBLP did not reply", which is not the
+    # same as an empty result list and must not fall through to a preprint as
+    # though DBLP had said the paper is unpublished.
     dblp_results = search_dblp(title)
-    published_bib, corr_bib = pick_published(
-        dblp_results, query_title=title,
-        query_year=int(year_m.group(1)) if year_m else None)
-    if published_bib:
-        _remember(**harvest_ids_from_bibtex(published_bib))
-        return _replace_key(published_bib, original_key), "DBLP"
+    if dblp_results:
+        published_bib, corr_bib = pick_published(
+            dblp_results, query_title=title,
+            query_year=int(year_m.group(1)) if year_m else None)
+        if published_bib:
+            _remember(**harvest_ids_from_bibtex(published_bib))
+            return _replace_key(published_bib, original_key), "DBLP"
     time.sleep(1.0)
 
     # Step 2 — S2 to get ACL / OpenReview IDs
@@ -713,6 +800,11 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         return (fetch_arxiv_bib(arxiv_id, original_key, known_title=title),
                 "arXiv (export API)")
 
+    # Nothing found -- but "no source has it" and "no source answered" are
+    # different conclusions, and only the first is worth recording as a failed
+    # attempt or reporting as a paper needing a hand-pasted entry.
+    if unanswered_lookups() > unanswered_before:
+        return "", UNANSWERED
     return "", "not found"
 
 
@@ -770,11 +862,17 @@ def main(argv=None) -> None:
         arxiv_label = f"arXiv:{arxiv_id}" if arxiv_id else "(no arXiv ID)"
         print(f"  [{key[:42]}] {arxiv_label:<22}", end=" ", flush=True)
 
+        before = unanswered_lookups()
         bib, source = resolve(title, arxiv_id, key, content)
         print(f"→ {source}")
 
-        attempts[key] = attempts.get(key, 0) + 1
-        save_attempts(attempts)
+        # Only a lookup that actually completed counts as an attempt. Counting a
+        # network failure would deprioritize the paper for a problem that is not
+        # the paper's, and an outage across one run is enough to push every
+        # unresolved entry past _DEPRIORITIZE_AFTER at once.
+        if bib or unanswered_lookups() == before:
+            attempts[key] = attempts.get(key, 0) + 1
+            save_attempts(attempts)
 
         report.append((key, source, bool(bib)))
         if bib:

@@ -212,6 +212,7 @@ def ladder(monkeypatch):
     default rather than listed per test.
     """
     monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
+    resolve_arxiv.reset_unanswered_lookups()
     closed = {
         "search_dblp": lambda t: [],
         "query_s2_by_arxiv": lambda a: None,
@@ -343,6 +344,45 @@ def test_the_arxiv_fallback_is_given_the_title_it_searched_on(ladder):
 def test_nothing_anywhere_is_reported_as_not_found(ladder):
     """Not an exception, and not an empty entry written to orig.bib."""
     bib, source = resolve(_TITLE, None, "k1", "")
+    assert (bib, source) == ("", "not found")
+
+
+# ── a source that did not answer is not a source that said no ────────────────
+#
+# DBLP rate-limits a long run, and used to do it invisibly: the refusal read as
+# "DBLP has no published version", the ladder fell through to the preprint, and a
+# paper that came out at ACL went back to being cited as arXiv with nothing logged.
+
+def _silent_dblp(_title):
+    resolve_arxiv._note_unanswered("dblp.org")
+    return None
+
+
+def test_a_silent_dblp_does_not_read_as_dblp_having_nothing(ladder):
+    """The distinction has to survive all the way up: `not found` here would be
+    recorded as a failed attempt and reported as needing a hand-pasted entry."""
+    ladder(search_dblp=_silent_dblp)
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert (bib, source) == ("", resolve_arxiv.UNANSWERED)
+
+
+def test_a_silent_dblp_still_lets_the_rest_of_the_ladder_answer(ladder):
+    """One source going quiet must not abandon the lookup -- a later source may
+    well have the paper, and then there is nothing unknown about it."""
+    ladder(search_dblp=_silent_dblp,
+           query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
+           fetch_acl_bib=lambda i, k: f"@inproceedings{{{k}, acl={i}}}")
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source == "ACL Anthology"
+
+
+def test_a_silent_source_does_not_taint_the_next_paper(ladder):
+    """resolve() compares against the count at its own entry, not against zero,
+    so one quiet lookup does not mark every later paper in the run unknown."""
+    ladder(search_dblp=_silent_dblp)
+    resolve(_TITLE, None, "k1", "")
+    ladder(search_dblp=lambda t: [])
+    bib, source = resolve(_TITLE, None, "k2", "")
     assert (bib, source) == ("", "not found")
 
 

@@ -177,7 +177,10 @@ def gather():
             "failed lookups is one no source indexes yet -- usually a very recent "
             "preprint, a blog post or a workshop paper. Those need either time "
             "or a hand-pasted entry; `clibib <doi-or-url>` helps when you have "
-            "an identifier.",
+            "an identifier. The count is lookups that completed and found "
+            "nothing: a lookup a source never answered is not counted, so the "
+            "number means \"no source has it\" rather than \"the network was "
+            "flaky\".",
             lines, nature=EXTERNAL))
 
     # ── citation matches that a human should confirm once ────────────────────
@@ -218,11 +221,16 @@ def gather():
                                             key=lambda r: -(r[1] or 0))]
         sections.append(Section(
             f"Scholar records with no row in the table ({len(result.unmatched)})",
-            "Either a paper to add, or something Scholar wrongly attributes to "
-            "you. Step 2 adds genuinely new papers automatically, so anything "
-            "persisting here is one you have decided not to list, or a "
-            "misattribution to remove from your Scholar profile.",
-            lines, nature=EXTERNAL))
+            "A Scholar record that no row claims. Step 2 adds genuinely new "
+            "papers by itself, so a record that persists here is one of three "
+            "things, and each is a decision only you can make: a paper you have "
+            "chosen not to list; a misattribution to remove from your Scholar "
+            "profile; or a table row that was deleted while `identity.json` "
+            "still binds its Scholar ID -- which step 2 will *not* re-add, "
+            "because the ID is already claimed and the paper therefore does not "
+            "look new. For that last one, delete the record for that key from "
+            "`identity.json` and the next run puts the row back.",
+            lines, nature=ONE_OFF))
 
     # ── venues that fall through to the draft section ────────────────────────
     # Two different problems, which want different fixes: a venue genuinely

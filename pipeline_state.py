@@ -134,7 +134,16 @@ def hash_file(path):
 
 
 class PipelineState:
-    """Per-step record of the input hashes present when the step last succeeded."""
+    """Per-step record of the file hashes present when the step last succeeded.
+
+    Inputs answer "is there new work?"; outputs answer "is the work still there?".
+    Both are needed, because a step whose inputs are unchanged has not already
+    run if what it produced was since edited, reverted or deleted -- and that
+    case is invisible from the inputs alone.
+
+    Records written before outputs were tracked stay readable: a step with no
+    recorded outputs reports them as changed, so it re-runs once and records them.
+    """
 
     VERSION = 1
 
@@ -157,9 +166,11 @@ class PipelineState:
     def save(self):
         tmp = self.path + ".tmp"
         payload = {
-            "_comment": "Input content hashes from the last successful run of "
-                        "each step, used to skip work whose inputs have not "
-                        "changed. Safe to delete: the next run redoes everything.",
+            "_comment": "Content hashes of each step's inputs and outputs as of "
+                        "its last successful run, used to skip work whose inputs "
+                        "have not changed and to notice output that was since "
+                        "edited away. Safe to delete: the next run redoes "
+                        "everything.",
             "version": self.VERSION,
             "steps": {k: self.steps[k] for k in sorted(self.steps)},
         }
@@ -170,24 +181,33 @@ class PipelineState:
 
     # ── staleness ────────────────────────────────────────────────────────────
 
+    def _changed(self, step, kind, paths):
+        recorded = (self.steps.get(step) or {}).get(kind)
+        if recorded is None:
+            return list(paths)
+        return [p for p in paths
+                if recorded.get(os.path.basename(p)) != hash_file(p)]
+
     def changed_inputs(self, step, inputs):
         """Return the input paths whose contents differ from the recorded run.
 
         A step that has never run reports all of its inputs as changed.
         """
-        recorded = (self.steps.get(step) or {}).get("inputs")
-        if recorded is None:
-            return list(inputs)
-        return [p for p in inputs
-                if recorded.get(os.path.basename(p)) != hash_file(p)]
+        return self._changed(step, "inputs", inputs)
 
-    def is_stale(self, step, inputs):
-        return bool(self.changed_inputs(step, inputs))
+    def changed_outputs(self, step, outputs):
+        """Return the output paths that no longer hold what the step wrote."""
+        return self._changed(step, "outputs", outputs)
 
-    def mark_done(self, step, inputs):
-        """Record the current input hashes as this step's completed state."""
+    def is_stale(self, step, inputs, outputs=()):
+        return bool(self.changed_inputs(step, inputs)
+                    or self.changed_outputs(step, outputs))
+
+    def mark_done(self, step, inputs, outputs=()):
+        """Record the current input and output hashes as this step's completed state."""
         self.steps[step] = {
             "inputs": {os.path.basename(p): hash_file(p) for p in inputs},
+            "outputs": {os.path.basename(p): hash_file(p) for p in outputs},
             "completed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "completed_epoch": int(time.time()),
         }

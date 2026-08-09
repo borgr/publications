@@ -23,25 +23,40 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import resolve_arxiv as ra
 from bib_utils import extract_field, is_wellformed_entry
 
+# Captured before the offline fixture replaces it with a tripwire, so the tests
+# of _curl_get itself can call the real thing.
+_REAL_CURL_GET = ra._curl_get
+
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
     """No network, no sleeping, and no S2 cooldown inherited from another test.
 
-    _s2_state is module-global: a test that trips the cooldown would otherwise
-    make every later S2 test see a paused source and pass for the wrong reason.
+    _s2_state and _net_state are module-global: a test that trips the cooldown
+    would otherwise make every later S2 test see a paused source and pass for the
+    wrong reason, and a leftover unanswered count would make a later test think
+    its own lookup went missing.
     """
     monkeypatch.setattr(ra, "_curl_get",
-                        lambda url: pytest.fail(f"unstubbed network call: {url}"))
+                        lambda url, **kw: pytest.fail(f"unstubbed network call: {url}"))
     monkeypatch.setattr(ra.time, "sleep", lambda _s: None)
     monkeypatch.setitem(ra._s2_state, "blocked_until", 0.0)
+    monkeypatch.setitem(ra._net_state, "unanswered", 0)
 
 
 def curl(monkeypatch, responses):
-    """Stub _curl_get with a url-substring -> body mapping."""
-    def _get(url):
+    """Stub _curl_get with a url-substring -> body mapping.
+
+    Honours the real contract, so callers are tested against it: a body the
+    caller's own `accept` predicate rejects comes back as None ("no answer"),
+    not as "" ("answered, has nothing").
+    """
+    def _get(url, accept=None, tries=1):
         for fragment, body in responses.items():
             if fragment in url:
+                if body and accept is not None and not accept(body):
+                    ra._note_unanswered(fragment)
+                    return None
                 return body
         return ""
     monkeypatch.setattr(ra, "_curl_get", _get)
@@ -210,6 +225,81 @@ def test_saving_attempts_leaves_no_temporary_behind(tmp_path, monkeypatch):
     assert [p.name for p in tmp_path.iterdir()] == ["attempts.json"]
 
 
+# ── a failed request is not an answer ────────────────────────────────────────
+#
+# _curl_get is the one door out for four of the five sources, so this is where
+# "nobody replied" either stays distinguishable from "nobody has it" or stops
+# being distinguishable for the whole pipeline.
+
+class _Result:
+    def __init__(self, returncode, stdout):
+        self.returncode, self.stdout = returncode, stdout
+
+
+def _curl_returning(monkeypatch, *results):
+    """Stub subprocess.run so the real _curl_get runs. Returns the call log.
+
+    Puts the real _curl_get back, since the offline fixture replaces it with a
+    tripwire -- these are the tests of that function itself.
+    """
+    calls = []
+
+    def _run(argv, **_kw):
+        calls.append(argv[-1])
+        result = results[min(len(calls) - 1, len(results) - 1)]
+        if isinstance(result, Exception):
+            raise result
+        return result
+    monkeypatch.setattr(ra, "_curl_get", _REAL_CURL_GET)
+    monkeypatch.setattr(ra.subprocess, "run", _run)
+    return calls
+
+
+def test_a_successful_empty_body_is_an_answer(monkeypatch):
+    """Retrying it would cost three requests for every paper no source indexes."""
+    calls = _curl_returning(monkeypatch, _Result(0, ""))
+    assert ra._curl_get("https://dblp.org/x") == ""
+    assert len(calls) == 1
+    assert ra.unanswered_lookups() == 0
+
+
+def test_a_transport_failure_is_retried_and_then_reported_as_no_answer(monkeypatch):
+    calls = _curl_returning(monkeypatch, _Result(7, ""))
+    assert ra._curl_get("https://dblp.org/x") is None
+    assert len(calls) == ra._CURL_TRIES
+    assert ra.unanswered_lookups() == 1
+
+
+def test_a_retry_that_succeeds_returns_the_body(monkeypatch):
+    """The failure mode being fixed was transient: the same query returned
+    nothing, then two results ten seconds later."""
+    _curl_returning(monkeypatch, _Result(7, ""), _Result(0, "@article{a,}"))
+    assert ra._curl_get("https://dblp.org/x") == "@article{a,}"
+    assert ra.unanswered_lookups() == 0
+
+
+def test_a_rejected_body_is_retried(monkeypatch):
+    """A refusal wearing an answer's clothes: HTTP 200 with an HTML error page."""
+    _curl_returning(monkeypatch, _Result(0, "<html>429</html>"),
+                    _Result(0, "@article{a,}"))
+    assert ra._curl_get("https://dblp.org/x",
+                        accept=lambda b: not b.startswith("<")) == "@article{a,}"
+
+
+def test_curl_raising_is_a_failure_not_a_crash(monkeypatch):
+    """subprocess.run(timeout=...) raises rather than returning non-zero, and an
+    unhandled TimeoutExpired took down the whole run."""
+    _curl_returning(monkeypatch, ra.subprocess.TimeoutExpired("curl", 30))
+    assert ra._curl_get("https://dblp.org/x") is None
+    assert ra.unanswered_lookups() == 1
+
+
+def test_the_host_is_named_when_a_request_goes_unanswered(monkeypatch, capsys):
+    _curl_returning(monkeypatch, _Result(7, ""))
+    ra._curl_get("https://dblp.org/search/publ/api?q=x")
+    assert "dblp.org" in capsys.readouterr().out
+
+
 # ── DBLP ─────────────────────────────────────────────────────────────────────
 
 def test_dblp_results_are_split_into_entries(monkeypatch):
@@ -220,24 +310,33 @@ def test_dblp_results_are_split_into_entries(monkeypatch):
     assert entries[0].startswith("@article{a,")
 
 
-def test_an_html_error_page_from_dblp_is_not_bibtex(monkeypatch):
-    """DBLP answers rate limiting with an HTML page and HTTP 200. Parsed as
-    BibTeX it yields nothing, but the check makes that explicit rather than
-    accidental."""
+def test_an_html_error_page_from_dblp_is_no_answer_not_no_results(monkeypatch):
+    """DBLP answers rate limiting with an HTML page and HTTP 200.
+
+    The distinction this asserts is the whole bug: read as an empty result list,
+    the refusal means "DBLP has no published version of this paper", the resolver
+    falls through to the arXiv preprint, and a paper that came out at ACL 2026
+    goes back to being cited as a preprint with nothing logged.
+    """
     curl(monkeypatch, {"dblp.org": "<html><body>429</body></html>"})
-    assert ra.search_dblp("A Paper") == []
+    assert ra.search_dblp("A Paper") is None
+    assert ra.unanswered_lookups() == 1
 
 
 def test_an_empty_dblp_response_is_no_results(monkeypatch):
+    """DBLP answers a no-hit title search with an empty body and HTTP 200, so
+    empty really does mean "not in DBLP" -- and must not be retried or counted."""
     curl(monkeypatch, {})
     assert ra.search_dblp("A Paper") == []
+    assert ra.unanswered_lookups() == 0
 
 
 def test_the_title_is_url_encoded(monkeypatch):
     """An unencoded `&` or `?` truncates the query, so DBLP searches for a
     prefix of the title and confidently returns a different paper."""
     seen = []
-    monkeypatch.setattr(ra, "_curl_get", lambda url: seen.append(url) or "")
+    monkeypatch.setattr(ra, "_curl_get",
+                        lambda url, **kw: seen.append(url) or "")
     ra.search_dblp("Cause & Effect: What?")
     assert "Cause%20%26%20Effect" in seen[0]
 

@@ -56,10 +56,13 @@ from identity import (
 from pipeline_state import AlreadyRunning, PipelineState, RunLock
 from resolve_arxiv import (
     _DEPRIORITIZE_AFTER,
+    UNANSWERED,
     load_attempts,
+    reset_unanswered_lookups,
     resolve,
     save_attempts,
     sort_by_attempts,
+    unanswered_lookups,
 )
 from table_io import (
     CSV_PATH,
@@ -89,13 +92,28 @@ TEX_PATH      = os.path.join(OVERLEAF_DIR, "main.tex")
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 # Each step's inputs. A step re-runs when any of its inputs' *contents* differ
-# from the last successful run. Two of these lists fix real skip bugs: step 4
-# ignored citations.csv, so refreshed counts never reached the bibliography, and
-# step 5 ignored profile_stats.json, so a new h-index never reached the CV.
+# from the last successful run. Three of these entries fix real skip bugs: step 4
+# ignored citations.csv, so refreshed counts never reached the bibliography; step
+# 5 ignored profile_stats.json, so a new h-index never reached the CV; and step 3
+# ignored orig.bib, which it both reads and writes, so a preprint entry added or
+# corrected by hand was never looked up until something else happened to change.
 STEP_INPUTS = {
-    "resolve":      [TABLE_PATH, CITATIONS_CSV],
+    "resolve":      [BIB_PATH, TABLE_PATH, CITATIONS_CSV],
     "build_bib":    [BIB_PATH, TABLE_PATH, CITATIONS_CSV, VENUES_PATH],
     "rebuild_tex":  [WZMN_BIB, STATS_PATH],
+}
+
+# What each step produces. Also checked before skipping, because a step whose
+# inputs are unchanged has still not "already run" if its output was since edited,
+# reverted or deleted. Without this, hand-reverting the citation totals in
+# main.tex was permanent: step 5's inputs were untouched, so it auto-skipped on
+# every subsequent run and only CI ever noticed the CV had gone stale.
+# Each file is listed under the one step that owns it; step 5 also rewrites
+# Wzmn.bib on its way through, but step 4 is what guards that.
+STEP_OUTPUTS = {
+    "resolve":      [BIB_PATH],
+    "build_bib":    [WZMN_BIB],
+    "rebuild_tex":  [TEX_PATH],
 }
 
 
@@ -396,10 +414,16 @@ def step3_resolve(dry_run: bool) -> tuple:
         arxiv_id = _get_arxiv_id(entry)
         label    = f"arXiv:{arxiv_id}" if arxiv_id else "(no arXiv ID)"
         print(f"    [{key[:40]}] {label:<22}", end=" ", flush=True)
+        before = unanswered_lookups()
         bib, source = resolve(entry["title"], arxiv_id, key, entry.get("content", ""),
                               store=store)
         print(f"→ {source}")
-        attempts[key] = attempts.get(key, 0) + 1
+        # Only a lookup that completed counts as an attempt. Counting a network
+        # failure deprioritizes the paper for something that is not the paper's
+        # fault, and one bad run is enough to push every unresolved entry past
+        # _DEPRIORITIZE_AFTER at the same time.
+        if bib or unanswered_lookups() == before:
+            attempts[key] = attempts.get(key, 0) + 1
         updates.append((key, bib, source))
         if i % 10 == 0:
             _checkpoint()
@@ -409,16 +433,22 @@ def step3_resolve(dry_run: bool) -> tuple:
     missing_entries = sort_by_attempts(get_missing_bib_entries(bib_text), attempts)
     new_entries = []
     not_found = []
+    unanswered: list = []
     if missing_entries:
         print(f"\n  {len(missing_entries)} table row(s) with no BibTeX key...")
     for i, entry in enumerate(missing_entries, 1):
         key = entry["item_name"]
         print(f"    [{key:<40}]", end=" ", flush=True)
+        before = unanswered_lookups()
         bib, source = resolve(entry["title"], None, key, "", store=store)
         print(f"→ {source}")
-        attempts[key] = attempts.get(key, 0) + 1
+        if bib or unanswered_lookups() == before:
+            attempts[key] = attempts.get(key, 0) + 1
         if bib:
             new_entries.append((key, bib))
+        elif source == UNANSWERED:
+            # Not a paper needing a hand-pasted entry; a question not yet asked.
+            unanswered.append((entry["title"][:70], key))
         else:
             not_found.append((entry["title"][:70], key))
         if i % 10 == 0:
@@ -429,10 +459,19 @@ def step3_resolve(dry_run: bool) -> tuple:
     store.save()
 
     # Also track arXiv entries that couldn't be resolved to any bib at all
-    for key, bib, _source in updates:
+    for key, bib, source in updates:
         if not bib:
             title = next((e["title"] for e in arxiv_entries if e["item_name"] == key), key)
-            not_found.append((title[:70], key))
+            bucket = unanswered if source == UNANSWERED else not_found
+            bucket.append((title[:70], key))
+
+    if unanswered:
+        print(f"\n  {len(unanswered)} lookup(s) got no answer from any source they "
+              f"needed. Not counted as failures; the next run asks again:")
+        for title, key in unanswered[:10]:
+            print(f"    [{key:<40}] {title}")
+        if len(unanswered) > 10:
+            print(f"    … and {len(unanswered) - 10} more")
 
     # Summary before writing
     upgraded = sum(1 for _, _, src in updates if src in _PUBLISHED_SOURCES)
@@ -679,12 +718,17 @@ Companion commands, none needed routinely:
         if args.force:
             return True
         changed = state.changed_inputs(step, STEP_INPUTS[step])
-        if not changed:
+        lost = state.changed_outputs(step, STEP_OUTPUTS[step])
+        if not changed and not lost:
             print(f"  Auto-skipped — inputs unchanged since "
                   f"{state.steps[step]['completed_at']} "
                   f"({', '.join(os.path.basename(p) for p in STEP_INPUTS[step])}).")
             return False
-        print(f"  Inputs changed: {', '.join(os.path.basename(p) for p in changed)}")
+        if changed:
+            print(f"  Inputs changed: {', '.join(os.path.basename(p) for p in changed)}")
+        if lost:
+            print(f"  Output no longer matches what this step wrote: "
+                  f"{', '.join(os.path.basename(p) for p in lost)}")
         return True
 
     # Step 1 — re-fetch when the recorded fetch has aged out. Time-based rather
@@ -711,23 +755,38 @@ Companion commands, none needed routinely:
 
     print("\n[Step 3] Resolving BibTeX entries")
     if _should_run("resolve", args.skip_resolve):
+        # Reset here rather than inside the step, so the count belongs to this
+        # run's lookups and nothing else.
+        reset_unanswered_lookups()
         n_upgraded, n_appended, n_still_arxiv, not_found = step3_resolve(args.dry_run)
         if not args.dry_run:
-            state.mark_done("resolve", STEP_INPUTS["resolve"])
-            state.save()
+            # A run during which a source went silent has not finished asking.
+            # Marking it done would freeze that answer in until an unrelated
+            # input changed, which for a paper published last week means being
+            # cited as a preprint for another week.
+            silent = unanswered_lookups()
+            if silent:
+                print(f"  Not recording step 3 as done: {silent} lookup(s) got no "
+                      f"answer, so the next run asks again.")
+            else:
+                state.mark_done("resolve", STEP_INPUTS["resolve"],
+                                STEP_OUTPUTS["resolve"])
+                state.save()
 
     print("\n[Step 4] Building the bibliography")
     if _should_run("build_bib", args.skip_publications):
         cats = step4_build_bib(args.dry_run)
         if not args.dry_run:
-            state.mark_done("build_bib", STEP_INPUTS["build_bib"])
+            state.mark_done("build_bib", STEP_INPUTS["build_bib"],
+                            STEP_OUTPUTS["build_bib"])
             state.save()
 
     print("\n[Step 5] Rebuilding overleaf/main.tex")
     if _should_run("rebuild_tex", args.skip_tex):
         step5_rebuild_tex(args.dry_run, cats)
         if not args.dry_run:
-            state.mark_done("rebuild_tex", STEP_INPUTS["rebuild_tex"])
+            state.mark_done("rebuild_tex", STEP_INPUTS["rebuild_tex"],
+                            STEP_OUTPUTS["rebuild_tex"])
             state.save()
 
     step6_worklist(args.dry_run)

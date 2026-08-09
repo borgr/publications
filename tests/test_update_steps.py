@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import resolve_arxiv
 import update
 from identity import IdentityStore
 
@@ -463,6 +464,8 @@ def step3(tmp_path, monkeypatch):
     bib = tmp_path / "orig.bib"
     monkeypatch.setattr(update, "BIB_PATH", str(bib))
     monkeypatch.setattr(update.time, "sleep", lambda _s: None)
+    # Module-global, and main() is what resets it in a real run.
+    monkeypatch.setitem(resolve_arxiv._net_state, "unanswered", 0)
     saved = {"attempts": [], "store": 0, "keys": {}}
     monkeypatch.setattr(update, "save_attempts",
                         lambda a: saved["attempts"].append(dict(a)))
@@ -557,13 +560,48 @@ def test_an_unchanged_bib_is_not_rewritten(step3, capsys):
     assert "left untouched" in capsys.readouterr().out
 
 
-def test_every_attempt_is_counted_even_when_it_fails(step3):
+def test_every_completed_attempt_is_counted_even_when_it_finds_nothing(step3):
     """The count is what sorts hopeless lookups last and what WORKLIST.md reports,
-    so it has to rise on failure -- that is the case it exists for."""
+    so it has to rise on a negative answer -- that is the case it exists for."""
     text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
     _r, _bib, saved = step3(text, missing=[{"item_name": "new1", "title": "New"}],
                             attempts={"k1": 3})
     assert saved["attempts"][-1] == {"k1": 4, "new1": 1}
+
+
+# ── a lookup that could not be made ──────────────────────────────────────────
+#
+# "No source has this paper" and "no source answered" look identical at the call
+# site, and treating the second as the first is expensive twice over: the retry
+# counter rises for something that is not the paper's fault, and the step records
+# itself as done, so the answer stays frozen in until an unrelated input changes.
+
+def _silent_source(*_a, **_k):
+    resolve_arxiv._note_unanswered("dblp.org")
+    return "", resolve_arxiv.UNANSWERED
+
+
+def test_a_lookup_nobody_answered_is_not_counted_as_an_attempt(step3):
+    """One outage would otherwise push every unresolved entry past the
+    deprioritization threshold at once, for a week when no source was even asked."""
+    _r, _bib, saved = step3("", missing=[{"item_name": "new1", "title": "New"}],
+                            attempts={"new1": 2}, resolver=_silent_source)
+    assert saved["attempts"][-1] == {"new1": 2}
+
+
+def test_a_lookup_nobody_answered_is_not_reported_as_needing_a_manual_entry(step3):
+    """WORKLIST.md's list is "paste an entry in by hand". A question that was
+    never asked does not belong on it."""
+    (_u, _a, _sa, not_found), _bib, _s = step3(
+        "", missing=[{"item_name": "new1", "title": "New"}], resolver=_silent_source)
+    assert not_found == []
+
+
+def test_a_silent_source_is_reported_as_such(step3, capsys):
+    text = _ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+    step3(text, resolver=_silent_source)
+    out = capsys.readouterr().out
+    assert "got no answer" in out and "k1" in out
 
 
 def test_progress_is_checkpointed_before_the_run_ends(step3):

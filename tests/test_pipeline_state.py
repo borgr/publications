@@ -72,6 +72,78 @@ def test_steps_are_tracked_independently(tmp_path):
     assert state.is_stale("tex", [a])
 
 
+# ── output that no longer holds what the step wrote ──────────────────────────
+#
+# Inputs alone answer "is there new work to do", which is not the same question as
+# "is the work still done". Reverting a generated file by hand leaves every input
+# untouched, so an inputs-only check skips the step forever and the reverted file
+# stays reverted.
+
+def test_an_edited_output_is_stale_and_is_named(tmp_path):
+    a = write(tmp_path / "a.txt", "one")
+    out = write(tmp_path / "out.tex", "generated")
+    state = PipelineState(path=str(tmp_path / "state.json"))
+    state.mark_done("build", [a], [out])
+    assert not state.is_stale("build", [a], [out])
+    write(tmp_path / "out.tex", "reverted by hand")
+    assert state.changed_outputs("build", [out]) == [out]
+    assert state.is_stale("build", [a], [out])
+
+
+def test_a_deleted_output_is_stale(tmp_path):
+    a = write(tmp_path / "a.txt", "one")
+    out = write(tmp_path / "out.tex", "generated")
+    state = PipelineState(path=str(tmp_path / "state.json"))
+    state.mark_done("build", [a], [out])
+    os.unlink(out)
+    assert state.is_stale("build", [a], [out])
+
+
+def test_inputs_and_outputs_are_tracked_separately(tmp_path):
+    """A file that is one step's output and the next step's input is one file, and
+    changing it must un-skip the producer, not be silently attributed elsewhere."""
+    a = write(tmp_path / "a.txt", "one")
+    out = write(tmp_path / "out.tex", "generated")
+    state = PipelineState(path=str(tmp_path / "state.json"))
+    state.mark_done("build", [a], [out])
+    write(tmp_path / "a.txt", "two")
+    assert state.changed_inputs("build", [a]) == [a]
+    assert state.changed_outputs("build", [out]) == []
+
+
+def test_outputs_round_trip(tmp_path):
+    a = write(tmp_path / "a.txt", "one")
+    out = write(tmp_path / "out.tex", "generated")
+    path = str(tmp_path / "state.json")
+    state = PipelineState(path=path)
+    state.mark_done("build", [a], [out])
+    state.save()
+    write(tmp_path / "out.tex", "reverted by hand")
+    assert PipelineState.load(path).is_stale("build", [a], [out])
+
+
+def test_a_step_recorded_before_outputs_were_tracked_is_stale(tmp_path):
+    """The migration path for state files written by the earlier schema: a step
+    with no recorded outputs re-runs once, rather than the file being discarded."""
+    a = write(tmp_path / "a.txt", "one")
+    out = write(tmp_path / "out.tex", "generated")
+    path = str(tmp_path / "state.json")
+    state = PipelineState(path=path)
+    state.mark_done("build", [a])          # no outputs, as the old schema wrote it
+    state.save()
+    reloaded = PipelineState.load(path)
+    assert not reloaded.is_stale("build", [a])      # inputs alone still agree
+    assert reloaded.is_stale("build", [a], [out])   # but the outputs are unknown
+
+
+def test_a_step_with_no_outputs_is_not_permanently_stale(tmp_path):
+    """Steps that produce no tracked file (fetch, push) pass no outputs at all."""
+    a = write(tmp_path / "a.txt", "one")
+    state = PipelineState(path=str(tmp_path / "state.json"))
+    state.mark_done("fetch", [a], [])
+    assert not state.is_stale("fetch", [a], [])
+
+
 def test_state_round_trips(tmp_path):
     a = write(tmp_path / "a.txt", "one")
     path = str(tmp_path / "state.json")

@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import resolve_arxiv
 import update
 from pipeline_state import PipelineState
 
@@ -34,17 +35,24 @@ _STEPS = {
 
 
 class Harness:
-    def __init__(self, calls, state_path, notified, inputs):
+    def __init__(self, calls, state_path, notified, inputs, outputs):
         self.calls = calls
         self.state_path = state_path
         self.notified = notified
         self.inputs = inputs
+        self.outputs = outputs
 
     def state(self):
         return PipelineState.load(self.state_path)
 
     def ran(self, step):
         return step in self.calls
+
+    def completed(self, step):
+        """Record `step` as having run, the way a real run would."""
+        state = self.state()
+        state.mark_done(step, self.inputs[step], self.outputs[step])
+        state.save()
 
 
 @pytest.fixture
@@ -61,17 +69,26 @@ def h(tmp_path, monkeypatch):
             return _r
         monkeypatch.setattr(update, name, recorder)
 
-    # Each step's declared inputs, redirected into the tmp dir so marking a step
-    # done and then re-running is a real content comparison, not a stub.
-    inputs = {}
-    for step, paths in update.STEP_INPUTS.items():
-        redirected = []
-        for path in paths:
-            p = tmp_path / os.path.basename(path)
-            p.write_text(f"contents of {p.name}\n")
-            redirected.append(str(p))
-        inputs[step] = redirected
+    # Each step's declared inputs and outputs, redirected into the tmp dir so
+    # marking a step done and then re-running is a real content comparison, not a
+    # stub. Redirecting by basename keeps the real relationships: orig.bib is both
+    # step 3's output and step 4's input, and both must land on one file.
+    def _redirect(declared):
+        table = {}
+        for step, paths in declared.items():
+            redirected = []
+            for path in paths:
+                p = tmp_path / os.path.basename(path)
+                if not p.exists():
+                    p.write_text(f"contents of {p.name}\n")
+                redirected.append(str(p))
+            table[step] = redirected
+        return table
+
+    inputs = _redirect(update.STEP_INPUTS)
+    outputs = _redirect(update.STEP_OUTPUTS)
     monkeypatch.setattr(update, "STEP_INPUTS", inputs)
+    monkeypatch.setattr(update, "STEP_OUTPUTS", outputs)
 
     state_path = str(tmp_path / "state.json")
     # Delegates to the real load, only with a redirected path: constructing a
@@ -90,7 +107,7 @@ def h(tmp_path, monkeypatch):
     monkeypatch.setattr(update, "CITATIONS_CSV", str(tmp_path / "citations.csv"))
     (tmp_path / "citations.csv").write_text("title,citations\n")
 
-    return Harness(calls, state_path, notified, inputs)
+    return Harness(calls, state_path, notified, inputs, outputs)
 
 
 # --- what a dry run must not do -----------------------------------------
@@ -116,29 +133,90 @@ def test_a_real_run_records_every_step_it_ran(h):
 # --- auto-skipping ------------------------------------------------------
 
 def test_unchanged_inputs_auto_skip_the_step(h):
-    state = h.state()
-    state.mark_done("resolve", h.inputs["resolve"])
-    state.save()
+    h.completed("resolve")
     update.main([])
     assert not h.ran("step3_resolve")
 
 
 def test_force_overrides_an_auto_skip(h):
-    state = h.state()
-    state.mark_done("resolve", h.inputs["resolve"])
-    state.save()
+    h.completed("resolve")
     update.main(["--force"])
     assert h.ran("step3_resolve")
 
 
 def test_a_changed_input_un_skips_the_step(h):
-    state = h.state()
-    state.mark_done("resolve", h.inputs["resolve"])
-    state.save()
+    h.completed("resolve")
     with open(h.inputs["resolve"][0], "a") as f:
         f.write("a new paper\n")
     update.main([])
     assert h.ran("step3_resolve")
+
+
+# --- output that went away ----------------------------------------------
+#
+# The inputs alone cannot see this: reverting the citation totals in main.tex by
+# hand left step 5's inputs untouched, so it auto-skipped on every later run and
+# the CV stayed wrong until CI compared against Overleaf. Locally, nothing said so.
+
+@pytest.mark.parametrize("step, func", [
+    ("resolve",     "step3_resolve"),
+    ("build_bib",   "step4_build_bib"),
+    ("rebuild_tex", "step5_rebuild_tex"),
+])
+def test_an_edited_output_un_skips_the_step(h, step, func):
+    h.completed(step)
+    with open(h.outputs[step][0], "w") as f:
+        f.write("someone reverted this by hand\n")
+    update.main([])
+    assert h.ran(func)
+
+
+@pytest.mark.parametrize("step, func", [
+    ("resolve",     "step3_resolve"),
+    ("build_bib",   "step4_build_bib"),
+    ("rebuild_tex", "step5_rebuild_tex"),
+])
+def test_a_deleted_output_un_skips_the_step(h, step, func):
+    h.completed(step)
+    os.unlink(h.outputs[step][0])
+    update.main([])
+    assert h.ran(func)
+
+
+# --- a run that could not finish asking ---------------------------------
+
+def test_a_run_where_a_source_went_silent_does_not_record_step_3_as_done(h, monkeypatch):
+    """Otherwise the next run auto-skips, and a paper published last week stays
+    cited as a preprint until some unrelated input happens to change."""
+    def silent(dry_run):
+        resolve_arxiv._note_unanswered("dblp.org")
+        return 0, 0, 0, []
+    monkeypatch.setattr(update, "step3_resolve", silent)
+    update.main([])
+    assert "resolve" not in h.state().steps
+    # The rest of the run must still happen: the data on disk is unchanged, not
+    # broken, and refusing to build the CV over it would be a worse failure.
+    assert h.ran("step5_rebuild_tex")
+    assert "rebuild_tex" in h.state().steps
+
+
+def test_a_run_where_every_source_answered_records_step_3_as_done(h):
+    update.main([])
+    assert "resolve" in h.state().steps
+
+
+def test_a_step_recorded_before_outputs_were_tracked_runs_once(h):
+    """An old .pipeline_state.json has no outputs; it must not be trusted blindly.
+
+    The graceful path for the schema change: the step re-runs once and records
+    its outputs, rather than the whole state file being discarded.
+    """
+    state = h.state()
+    state.mark_done("resolve", h.inputs["resolve"])   # no outputs, as before
+    state.save()
+    update.main([])
+    assert h.ran("step3_resolve")
+    assert h.state().steps["resolve"]["outputs"], "outputs still not recorded"
 
 
 @pytest.mark.parametrize("flag, step", [

@@ -27,16 +27,22 @@ looking current.
 
 ```bash
 python update.py --dry-run    # show what would change: no writes, no network
-python update.py --force      # ignore the "inputs unchanged" checks
+python update.py --force      # ignore the "nothing changed" checks
 python update.py --no-push    # build locally, leave the remotes alone
 python update.py --skip-fetch # reuse the citation counts already on disk
 ```
 
 ### What it does
 
-Each step is skipped when the **contents** of its inputs are unchanged since it
-last succeeded (recorded in `.pipeline_state.json`) — content hashes, not mtimes,
-so a fresh clone behaves correctly and a no-op rewrite does not cascade.
+Each step is skipped when the **contents** of both its inputs and its outputs are
+unchanged since it last succeeded (recorded in `.pipeline_state.json`) — content
+hashes, not mtimes, so a fresh clone behaves correctly and a no-op rewrite does
+not cascade. Checking the outputs too is what makes a hand-edit heal: revert the
+citation totals in `main.tex` and the next run notices its own output is gone and
+rebuilds it, instead of skipping forever because no input changed.
+
+A run where a source never replied does not record its step as done, so the next
+run asks again rather than freezing a lookup that failed for network reasons.
 
 | # | Step | What it does |
 |---|------|--------------|
@@ -118,13 +124,16 @@ works, with more waiting.
 Split deliberately, because Scholar blocks datacenter IP ranges — a hosted runner
 gets a CAPTCHA, not data:
 
-- **Locally**, weekly, via `scripts/install_schedule.py`. This is the one that
-  fetches from Scholar. It also needs the Overleaf token stored once, with
-  `scripts/install_overleaf_credential.py` — see below.
+- **Locally**, weekly (Monday 08:37), via `scripts/install_schedule.py`. This is
+  the one that fetches from Scholar. It also needs the Overleaf token stored once,
+  with `scripts/install_overleaf_credential.py` — see below.
 - **[GitHub Actions](.github/workflows/ci.yml)** covers what does not need
-  Scholar: the test suite on two Python versions, a rebuild from committed data,
-  a determinism check, and a failure if the table has duplicate rows or an
-  ambiguous citation join. No secrets, works in a fork.
+  Scholar: the test suite on three Python versions, the oldest supported
+  dependency versions, a rebuild from committed data, a determinism check, a
+  fork-from-scratch check, and a failure if the table has duplicate rows or an
+  ambiguous citation join. No secrets, works in a fork. It also runs weekly, on
+  Monday at 14:47 UTC — deliberately *after* the local run, since checking first
+  would compare against data an hour from being replaced.
 
 ### Letting the local run push to Overleaf
 
@@ -192,6 +201,12 @@ by default: Overleaf is a document you also edit by hand, so writing to it is a
 decision, not a default. It rebases before retrying, so a push and a hand edit
 racing does not fail the run.
 
+Publishing runs on the default branch only, and one run at a time. Overleaf holds
+one CV, so a work-in-progress branch has nowhere good to put its version of it:
+publishing would overwrite the real one, and failing would go red for exactly the
+work the branch exists to do. Two runs pushing at once is the other half of that —
+the job takes a `concurrency` lock rather than racing.
+
 With no secret set, the job prints how to enable itself and passes — a fork is
 never red for a project it does not have. The same staleness is reported locally
 in `WORKLIST.md`, which needs no credentials.
@@ -234,8 +249,9 @@ instruction above is about.
 
 Generated but **committed**, because each is expensive to rebuild or useful to
 browse: `citations.csv`, `profile_stats.json`, `identity.json` (harvested
-identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`,
-`WORKLIST.md`, `overleaf/Wzmn.bib`.
+identifiers), `resolve_attempts.json` (retry counters), `.pipeline_state.json`
+(the input and output hashes each step last saw), `WORKLIST.md`,
+`overleaf/Wzmn.bib`.
 
 `papers.csv` is the only table format. `table_io.py` addresses every column by
 header name — so inserting or reordering one cannot misfile a value — and
@@ -257,7 +273,7 @@ reformats a column produces a table that still builds, just wrongly.
 | `rebuild_tex.py` | Updates `main.tex` in place. |
 | `bib_utils.py` | Brace-counting BibTeX parser, text normalization, publication ranking. Reads only. |
 | `venues.py` | Loads `venues.yaml`. |
-| `pipeline_state.py` | Content-hash step skipping. |
+| `pipeline_state.py` | Content-hash step skipping, over inputs and outputs both. |
 | `notify.py` | Failure notification (macOS Notification Center, Actions annotation). |
 | `scripts/papers_fig.py`, `scripts/papers_graph.py` | Standalone figures. Not part of the pipeline; needs `requirements-figures.txt`. |
 
