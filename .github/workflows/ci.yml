@@ -15,8 +15,12 @@ on:
   pull_request:
   schedule:
     # Weekly, so bit-rot in a dependency surfaces even with no commits.
-    # 07:23 Monday, off the hour to avoid the scheduling stampede.
-    - cron: "23 7 * * 1"
+    # 14:47 Monday UTC, off the hour to avoid the scheduling stampede, and
+    # deliberately *after* the local run (08:37 local, i.e. 12:37 UTC in EDT and
+    # 13:37 in EST): the local run is the one that fetches Scholar and pushes, so
+    # CI checking first would compare against data an hour from being replaced
+    # and report a staleness that fixes itself.
+    - cron: "47 14 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -28,6 +32,10 @@ jobs:
     # is the kind of thing that only surfaces months later, during the one run
     # of the year that needed it.
     runs-on: ubuntu-latest
+    # Every job carries a timeout. The default is six hours, which for a suite
+    # that finishes in two minutes means a hung network call burns a runner for
+    # an afternoon and reports nothing until it does.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,6 +57,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -96,6 +105,7 @@ jobs:
     # who finds out, and they have no way to tell a bad floor from their own
     # mistake. This resolves every `>=` to `==` and runs the suite against it.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
@@ -123,6 +133,7 @@ jobs:
     # Proves the committed data still builds, and that rebuilding is
     # deterministic -- the bibliography must not change just because it ran again.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -180,6 +191,7 @@ jobs:
     # So: clone as a stranger, with credentials actively disabled, and drive the
     # documented fork path end to end. No secrets, and none usable if there were.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/setup-python@v7
         with:
@@ -275,8 +287,28 @@ jobs:
     # Fork-safe: with no OVERLEAF_GIT_URL secret the job explains itself and
     # passes. It is skipped on pull_request, where secrets are unavailable to
     # forked PRs by design.
-    if: github.event_name != 'pull_request'
+    #
+    # Default branch only. Overleaf holds one CV, not one per branch, so a WIP
+    # branch has nothing to say about whether it is current: with
+    # PUBLISH_TO_OVERLEAF on, pushing a branch would publish that branch's CV
+    # over the real one, and with it off, every branch that touches the data goes
+    # red for a difference that is the point of the branch. `schedule` is exempt
+    # from the ref test because GitHub only ever runs a schedule on the default
+    # branch, and the default_branch field it would compare against is not
+    # guaranteed to be in that event's payload.
+    if: >-
+      github.event_name != 'pull_request'
+      && (github.event_name == 'schedule'
+          || github.ref_name == github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # One publisher at a time, repository-wide, and never cancelled: this job can
+    # push to Overleaf, and two runs racing means one force-rebases over the
+    # other's commit. cancel-in-progress would be worse than the race -- killing
+    # the job mid-push is how a half-published CV happens.
+    concurrency:
+      group: overleaf-publish
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:

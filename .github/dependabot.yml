@@ -19,9 +19,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      # Off the hour, and after the 07:23 CI run, so a bump lands on a workflow
-      # that has just been proven green.
-      time: "08:17"
+      # Off the hour, and after the 14:47 UTC CI run, so a bump lands on a
+      # workflow that has just been proven green. Dependabot reads this as UTC
+      # unless a timezone is given.
+      time: "15:19"
     open-pull-requests-limit: 3
     commit-message:
       prefix: "ci"
