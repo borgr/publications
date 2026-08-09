@@ -11,7 +11,7 @@ Citation join: 115 papers matched, 98 by stable Scholar ID.
 
 *waiting on a source* — Cannot be fixed here -- it depends on an external record.
 
-Retried automatically every run against DBLP, Semantic Scholar, the ACL Anthology, OpenReview and OpenAlex. An entry with several failed lookups is one no source indexes yet -- usually a very recent preprint, a blog post or a workshop paper. Those need either time or a hand-pasted entry; `clibib <doi-or-url>` helps when you have an identifier.
+Retried automatically every run against DBLP, Semantic Scholar, the ACL Anthology, OpenReview and OpenAlex. An entry with several failed lookups is one no source indexes yet -- usually a very recent preprint, a blog post or a workshop paper. Those need either time or a hand-pasted entry; `clibib <doi-or-url>` helps when you have an identifier. The count is lookups that completed and found nothing: a lookup a source never answered is not counted, so the number means "no source has it" rather than "the network was flaky".
 
 - `shnarch2024inter` — Inter-training of pre-trained transformer-based language models using partitioning and classification — 2 failed lookup(s) so far
 - `honovich2022true` — True or false? faithful summarization with attribution — 2 failed lookup(s) so far
