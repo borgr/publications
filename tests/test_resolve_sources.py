@@ -619,47 +619,109 @@ def test_the_title_is_url_encoded(monkeypatch):
 
 
 # ── Semantic Scholar title search ────────────────────────────────────────────
+#
+# S2's search ranks its whole index against the query and always answers. Every
+# test here is about the difference between an answer and a match.
 
-def test_s2_title_search_prefers_a_candidate_from_the_right_year(monkeypatch):
-    monkeypatch.setattr(ra, "_http_get_json", lambda url: {"data": [
-        {"title": "Wrong", "year": 2015},
-        {"title": "Right", "year": 2024}]})
-    assert ra.query_s2_by_title("A Paper", "2024")["title"] == "Right"
+_ASKED = "Every eval ever: Toward a common language for AI eval reporting"
+_LANCET = ("Global burden of 292 causes of death in 204 countries and territories "
+           "and 660 subnational locations, 1990-2023: a systematic analysis for "
+           "the Global Burden of Disease Study 2023")
+
+
+def _s2_search(monkeypatch, candidates):
+    monkeypatch.setattr(ra, "_http_get_json", lambda url: {"data": candidates})
+
+
+def test_s2_title_search_refuses_an_unrelated_paper(monkeypatch):
+    """The mis-resolution this guard exists for, with the two real titles.
+
+    S2 answered the AI paper's title with a Lancet epidemiology paper, and because
+    an answer was taken for a match, the Lancet paper's DOI became this paper's
+    known DOI. It was then resolved to BibTeX by identifier -- exactly, correctly,
+    and to the wrong paper -- appended to orig.bib, written into papers.csv, and
+    recorded in the identity store. The CV listed the global burden of disease.
+    """
+    _s2_search(monkeypatch, [{"title": _LANCET, "year": 2025,
+                              "externalIds": {"DOI": "10.1016/S0140-6736(25)01917-8"}}])
+    assert ra.query_s2_by_title(_ASKED, "2026") is None
+
+
+def test_a_candidate_that_merely_shares_words_is_not_the_paper(monkeypatch):
+    """clibib's title search returned this one for the same query. A relevance
+    search is drawn to exactly this: the query's distinctive words, in a paper
+    from another field."""
+    _s2_search(monkeypatch, [
+        {"title": "A Common Language for Reporting Earthquake Intensities"}])
+    assert ra.query_s2_by_title(_ASKED) is None
+
+
+def test_the_right_paper_is_returned(monkeypatch):
+    """Capitalisation and punctuation differ between the table and S2's record;
+    the comparison normalises both away."""
+    _s2_search(monkeypatch, [{"title": _LANCET},
+                             {"title": _ASKED.title(), "year": 2026}])
+    assert ra.query_s2_by_title(_ASKED, "2026")["year"] == 2026
+
+
+def test_the_asked_for_year_is_preferred_among_records_of_one_paper(monkeypatch):
+    """S2 often holds both the preprint and the published version under one
+    title. The published one carries the DOI and venue the ladder is after."""
+    _s2_search(monkeypatch, [{"title": _ASKED, "year": 2024},
+                             {"title": _ASKED, "year": 2026}])
+    assert ra.query_s2_by_title(_ASKED, "2026")["year"] == 2026
 
 
 def test_a_one_year_gap_is_still_the_same_paper(monkeypatch):
     """A preprint and its publication are usually a year apart."""
-    monkeypatch.setattr(ra, "_http_get_json",
-                        lambda url: {"data": [{"title": "T", "year": 2023}]})
-    assert ra.query_s2_by_title("A Paper", "2024")["title"] == "T"
+    _s2_search(monkeypatch, [{"title": _ASKED, "year": 2025}])
+    assert ra.query_s2_by_title(_ASKED, "2026")["year"] == 2025
 
 
 def test_a_candidate_with_no_year_is_not_rejected(monkeypatch):
     """S2 records for very recent papers often have a null year; dropping them
     would lose exactly the papers most likely to be unresolved."""
-    monkeypatch.setattr(ra, "_http_get_json",
-                        lambda url: {"data": [{"title": "T", "year": None}]})
-    assert ra.query_s2_by_title("A Paper", "2024") is not None
+    _s2_search(monkeypatch, [{"title": _ASKED, "year": None}])
+    assert ra.query_s2_by_title(_ASKED, "2026") is not None
 
 
-def test_the_first_result_is_used_when_no_year_is_known(monkeypatch):
-    monkeypatch.setattr(ra, "_http_get_json",
-                        lambda url: {"data": [{"title": "First"}, {"title": "Second"}]})
-    assert ra.query_s2_by_title("A Paper")["title"] == "First"
+def test_the_first_match_is_used_when_no_year_is_known(monkeypatch):
+    """Without a year there is nothing to prefer by, but there is still a title
+    to reject by -- the top-ranked answer is not automatically the paper."""
+    _s2_search(monkeypatch, [{"title": _LANCET, "year": 2025},
+                             {"title": _ASKED, "year": 2024},
+                             {"title": _ASKED, "year": 2026}])
+    assert ra.query_s2_by_title(_ASKED)["year"] == 2024
 
 
-def test_every_candidate_from_the_wrong_year_falls_back_to_the_best_guess(monkeypatch):
-    """Rather than nothing: the caller only uses S2 for its identifier
-    crosswalk, and a wrong ID is caught downstream by the title guards."""
-    monkeypatch.setattr(ra, "_http_get_json",
-                        lambda url: {"data": [{"title": "Old", "year": 1999}]})
-    assert ra.query_s2_by_title("A Paper", "2024")["title"] == "Old"
+def test_a_similar_title_from_the_wrong_year_is_rejected(monkeypatch):
+    """Neither test is sufficient alone: this title scores above the floor, and
+    the year alone would not distinguish a paper from its own preprint."""
+    _s2_search(monkeypatch, [
+        {"title": "Every eval ever: a common language for eval reporting",
+         "year": 2019}])
+    assert ra.query_s2_by_title(_ASKED, "2026") is None
+
+
+def test_the_same_title_from_a_distant_year_is_still_the_paper(monkeypatch):
+    """Deliberately asymmetric: an identical title is identity enough on its own,
+    because a publication lag can be years -- ComPEFT's journal version is two
+    years after its preprint, under the same title."""
+    _s2_search(monkeypatch, [{"title": _ASKED, "year": 2019}])
+    assert ra.query_s2_by_title(_ASKED, "2026") is not None
 
 
 @pytest.mark.parametrize("payload", [None, {}, {"data": []}])
 def test_an_empty_s2_response_is_no_match(monkeypatch, payload):
     monkeypatch.setattr(ra, "_http_get_json", lambda url: payload)
-    assert ra.query_s2_by_title("A Paper") is None
+    assert ra.query_s2_by_title(_ASKED) is None
+
+
+def test_a_candidate_with_no_title_is_not_a_match(monkeypatch):
+    """S2 sends records with a null title. There is then nothing to check the
+    identity against, and unchecked is how the Lancet paper got in."""
+    _s2_search(monkeypatch, [{"title": None, "externalIds": {"DOI": "10.1/x"}}])
+    assert ra.query_s2_by_title(_ASKED) is None
 
 
 def test_s2_by_arxiv_asks_for_the_fields_the_crosswalk_needs(monkeypatch):

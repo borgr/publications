@@ -460,13 +460,18 @@ def _bib_year(bibtex: str) -> int | None:
 # title. Below it, agreement on the year is required as well.
 _SAME_TITLE_RATIO = 0.95
 
+# Below this, two titles are two papers. The Lancet's "Global burden of 292 causes
+# of death in 204 countries..." scores 0.22 against "Every eval ever: Toward a
+# common language for AI eval reporting"; a genuine retitling scores far higher --
+# the Data Provenance Initiative's journal version scores 0.77 against its
+# preprint, and most published versions keep the preprint's title exactly.
+_MIN_TITLE_RATIO = 0.72
 
-def pick_published(bibtex_list: list[str], query_title: str = "",
-                   query_year: int | None = None) -> tuple[str | None, str | None]:
-    """Return (first_published, first_corr) from DBLP results.
 
-    When query_title is given, published entries whose title similarity is below
-    0.72 are skipped — this guards against DBLP returning a different paper.
+def titles_agree(query_title: str, found_title: str,
+                 query_year: int | None = None,
+                 found_year: int | None = None) -> bool:
+    """Whether a source's answer is a version of the paper that was asked for.
 
     Similarity alone is not enough: difflib rewards a long common subsequence
     however much *extra* text there is, and the extra text is often exactly what
@@ -474,6 +479,34 @@ def pick_published(bibtex_list: list[str], query_title: str = "",
     0.76 against "SEA-HELM: Southeast Asian Holistic Evaluation of Language
     Models", a different paper three years later. So a merely-similar title also
     has to agree on the year.
+
+    One definition, shared by every source that answers a title with its best
+    guess rather than with a match. DBLP had it and Semantic Scholar's title
+    search did not, which is the whole distance between the two: S2 answered
+    "Every eval ever: Toward a common language for AI eval reporting" with a
+    Lancet epidemiology paper, that record's DOI became the paper's known DOI,
+    and the CV printed "Global burden of 292 causes of death in 204 countries and
+    territories".
+    """
+    if not query_title or not found_title:
+        return False
+    ratio = difflib.SequenceMatcher(
+        None, _simplify_title(query_title), _simplify_title(found_title),
+    ).ratio()
+    if ratio < _MIN_TITLE_RATIO:
+        return False
+    if ratio < _SAME_TITLE_RATIO and query_year and found_year:
+        return 0 <= found_year - query_year <= 1
+    return True
+
+
+def pick_published(bibtex_list: list[str], query_title: str = "",
+                   query_year: int | None = None) -> tuple[str | None, str | None]:
+    """Return (first_published, first_corr) from DBLP results.
+
+    When query_title is given, published entries that are not a version of it are
+    skipped — see `titles_agree` — which guards against DBLP returning a
+    different paper.
 
     And whatever the titles say, an entry that does not list the author is not a
     version of the author's paper. Without that test this function accepted a 2022
@@ -489,18 +522,9 @@ def pick_published(bibtex_list: list[str], query_title: str = "",
                 corr = bib
         else:
             if published is None:
-                if query_title:
-                    ratio = difflib.SequenceMatcher(
-                        None,
-                        _simplify_title(query_title),
-                        _simplify_title(_dblp_title(bib)),
-                    ).ratio()
-                    if ratio < 0.72:
-                        continue
-                    year = _bib_year(bib)
-                    if (ratio < _SAME_TITLE_RATIO and query_year and year
-                            and not 0 <= year - query_year <= 1):
-                        continue
+                if query_title and not titles_agree(
+                        query_title, _dblp_title(bib), query_year, _bib_year(bib)):
+                    continue
                 published = bib
     return published, corr
 
@@ -574,7 +598,29 @@ def query_s2_by_arxiv(arxiv_id: str) -> dict | None:
     return _http_get_json(url)
 
 
+def _s2_year(candidate: dict) -> int | None:
+    """S2 leaves `year` null on very recent records and occasionally sends a string."""
+    try:
+        return int(candidate.get("year"))
+    except (ValueError, TypeError):
+        return None
+
+
 def query_s2_by_title(title: str, year: str = "") -> dict | None:
+    """S2's record for a paper found by title, or None if none of its answers is it.
+
+    S2's search is a relevance search: every query is answered with its best few
+    guesses, including a query it has nothing for. So an answer is a candidate,
+    not a match, and has to be checked against what was asked for -- unchecked,
+    this returned a Lancet epidemiology paper for "Every eval ever: Toward a
+    common language for AI eval reporting", and the caller took the crosswalk from
+    it: the Lancet paper's DOI became that paper's known DOI, was resolved to
+    BibTeX, appended to the CV, and written to the identity store.
+
+    The unchecked version was also unrejectable in principle. Its year filter
+    `continue`d past a bad year only to fall through to `data[0]` at the end, so
+    every answer S2 gave was returned; there was no path on which it declined.
+    """
     params = urlencode({
         "query": title,
         "fields": "externalIds,publicationVenue,year,title",
@@ -583,15 +629,21 @@ def query_s2_by_title(title: str, year: str = "") -> dict | None:
     data = _http_get_json(f"https://api.semanticscholar.org/graph/v1/paper/search?{params}")
     if not data or not data.get("data"):
         return None
-    for candidate in data["data"]:
-        if year:
-            try:
-                if abs(int(candidate.get("year", 0)) - int(year)) > 1:
-                    continue
-            except (ValueError, TypeError):
-                pass
-        return candidate
-    return data["data"][0] if data["data"] else None
+    query_year = int(year) if str(year).strip().isdigit() else None
+    same_paper = [c for c in data["data"]
+                  if titles_agree(title, c.get("title") or "",
+                                  query_year, _s2_year(c))]
+    if not same_paper:
+        return None
+    # Among records of the same paper -- typically the preprint and the published
+    # version -- the one from the asked-for year is the more likely to carry the
+    # published DOI and venue that the rest of the ladder is after.
+    if query_year:
+        for candidate in same_paper:
+            found = _s2_year(candidate)
+            if found is not None and abs(found - query_year) <= 1:
+                return candidate
+    return same_paper[0]
 
 
 # ── ACL Anthology ─────────────────────────────────────────────────────────────
@@ -773,6 +825,11 @@ def openalex_to_bibtex(work, original_key):
 # silent wrong entry in a CV is worse than a missing one, and clibib's own README
 # says to prefer identifiers. Its identifier paths are exact and fast.
 #
+# Exact, though, is not the same as right: an exact lookup of a wrong DOI returns a
+# wrong paper just as confidently, so what comes back is checked against the title
+# that was asked for. The same paper as the earthquake one, resolved by DOI this
+# time, came back as a Lancet epidemiology paper.
+#
 # Optional: absent clibib, this degrades to the arXiv fallback as before.
 
 _CLIBIB_STATE = {"checked": False, "fn": None}
@@ -790,8 +847,23 @@ def _clibib_fetch():
     return _CLIBIB_STATE["fn"]
 
 
-def fetch_by_doi(doi: str, original_key: str) -> str | None:
-    """Resolve a DOI to BibTeX via clibib. Returns None on any failure."""
+def fetch_by_doi(doi: str, original_key: str, expected_title: str,
+                 expected_year: int | None = None) -> str | None:
+    """Resolve a DOI to BibTeX via clibib. Returns None on any failure.
+
+    `expected_title` is the paper the caller is asking about, and is required:
+    resolving by identifier is exact, but the *identifier* can be wrong, and then
+    what comes back is a real, correctly-formed, verifiable entry for somebody
+    else's paper. That is what happened -- a DOI crosswalked from an unguarded S2
+    title search resolved to "Global burden of 292 causes of death in 204
+    countries and territories", The Lancet, and it went into the CV and the
+    identity store under an AI paper's key.
+
+    The upstream guard now stops that DOI from being learned in the first place.
+    This one is here because the DOI does not have to be freshly learned to be
+    wrong: it can come from a bib entry a human pasted, or from a store record a
+    previous version of this code already poisoned.
+    """
     fetch = _clibib_fetch()
     if not fetch or not doi:
         return None
@@ -800,6 +872,9 @@ def fetch_by_doi(doi: str, original_key: str) -> str | None:
     except Exception:
         return None
     if not bib or not bib.strip().startswith("@"):
+        return None
+    if not titles_agree(expected_title, _dblp_title(bib),
+                        expected_year, _bib_year(bib)):
         return None
     return _replace_key(bib.strip(), original_key)
 
@@ -967,7 +1042,8 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     # asking is a wasted request that then gets rejected by the rank guard -- it
     # did so 10 times on a real run.
     if known_doi and not known_doi.lower().startswith("10.48550/"):
-        bib = fetch_by_doi(known_doi, original_key)
+        bib = fetch_by_doi(known_doi, original_key, title,
+                           int(year_m.group(1)) if year_m else None)
         if bib:
             _remember(doi=known_doi)
             return bib, "DOI (clibib)"

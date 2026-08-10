@@ -57,17 +57,26 @@ def test_repeatedly_failing_entries_sort_last():
 # search returned a confidently wrong paper 2 times in 5 without raising, so it
 # is wired in for DOIs only. These tests stub it out: no network in the suite.
 
+_JOURNAL_TITLE = "A Journal Paper With A Long Enough Title"
+
+
+def _clibib_returning(monkeypatch, title=_JOURNAL_TITLE, year=""):
+    """Stub clibib with an entry for `title`, echoing back the DOI it was asked for."""
+    def _fetch(ident):
+        return (f"@article{{zotero_key, title = {{{title}}}, "
+                f"{f'year = {{{year}}}, ' if year else ''}doi = {{{ident}}}}}")
+    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: _fetch)
+
+
 def test_doi_lookup_is_used_when_a_doi_is_known(monkeypatch):
     """Fills a real gap: this module has no other DOI resolver."""
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
-                        lambda: lambda ident: f"@article{{zotero_key, doi={{{ident}}}}}")
+    _clibib_returning(monkeypatch)
 
     store = IdentityStore()
     store.record("k1", doi="10.1038/s41586-021-03215-w")
-    bib, source = resolve("A Journal Paper With A Long Enough Title", None, "k1",
-                          "", store=store)
+    bib, source = resolve(_JOURNAL_TITLE, None, "k1", "", store=store)
     assert source == "DOI (clibib)"
     assert "10.1038/s41586-021-03215-w" in bib
     assert bib.startswith("@article{k1,"), "the key must be rewritten to ours"
@@ -76,10 +85,8 @@ def test_doi_lookup_is_used_when_a_doi_is_known(monkeypatch):
 def test_doi_is_taken_from_the_existing_entry_when_not_yet_recorded(monkeypatch):
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
-                        lambda: lambda ident: f"@article{{z, doi={{{ident}}}}}")
-    bib, source = resolve("A Journal Paper With A Long Enough Title", None, "k1",
-                          "doi = {10.1234/abcd}")
+    _clibib_returning(monkeypatch)
+    bib, source = resolve(_JOURNAL_TITLE, None, "k1", "doi = {10.1234/abcd}")
     assert source == "DOI (clibib)"
     assert "10.1234/abcd" in bib
 
@@ -115,13 +122,99 @@ def test_clibib_failure_degrades_rather_than_raising(monkeypatch):
     def explode(_ident):
         raise RuntimeError("translation server down")
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: explode)
-    assert resolve_arxiv.fetch_by_doi("10.1/x", "k1") is None
+    assert resolve_arxiv.fetch_by_doi("10.1/x", "k1", _JOURNAL_TITLE) is None
 
 
 def test_clibib_non_bibtex_response_is_rejected(monkeypatch):
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
                         lambda: lambda i: "<html>error</html>")
-    assert resolve_arxiv.fetch_by_doi("10.1/x", "k1") is None
+    assert resolve_arxiv.fetch_by_doi("10.1/x", "k1", _JOURNAL_TITLE) is None
+
+
+# ── a DOI can be exact and still be the wrong paper ───────────────────────────
+
+_ASKED = "Every eval ever: Toward a common language for AI eval reporting"
+_LANCET_BIB = (
+    "@article{Collaborators2025,\n"
+    "  title = {Global burden of 292 causes of death in 204 countries and "
+    "territories and 660 subnational locations, 1990-2023: a systematic analysis "
+    "for the Global Burden of Disease Study 2023},\n"
+    "  journal = {The Lancet},\n  year = {2025},\n"
+    "  doi = {10.1016/S0140-6736(25)01917-8},\n}"
+)
+
+
+def test_a_doi_that_resolves_to_a_different_paper_is_refused(monkeypatch):
+    """The entry that reached the CV. Nothing about it is malformed -- it is a real
+    paper, well-formed, with a real DOI and a real venue. The only thing wrong with
+    it is that it is not the paper that was asked for, and until this check that
+    was the one property nothing tested."""
+    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: lambda i: _LANCET_BIB)
+    assert resolve_arxiv.fetch_by_doi(
+        "10.1016/S0140-6736(25)01917-8", "batzner2026everyeval", _ASKED, 2026) is None
+
+
+def test_a_retitled_published_version_is_still_accepted(monkeypatch):
+    """The guard has to leave room for the thing this rung is for. Journals retitle
+    papers: the Data Provenance Initiative's article scores 0.77 against its
+    preprint's title, above the floor, and its year agrees."""
+    bib = ("@article{z, title = {A large-scale audit of dataset licensing and "
+           "attribution in AI}, year = {2024}, doi = {10.1038/s42256-024-00878-8}}")
+    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: lambda i: bib)
+    asked = ("The Data Provenance Initiative: A Large Scale Audit of Dataset "
+             "Licensing & Attribution in AI")
+    assert resolve_arxiv.fetch_by_doi("10.1038/s42256-024-00878-8", "k1",
+                                      asked, 2023) is not None
+
+
+def test_the_whole_chain_that_printed_a_lancet_paper_in_the_cv(monkeypatch):
+    """End to end, with every source answering exactly as it did on the day.
+
+    Each step was defensible on its own: S2's search returned its best guess, the
+    crosswalk took the DOI from the record it was handed, and clibib resolved that
+    DOI exactly. The paper still came out wrong, so the test is of the chain and
+    not of any one link.
+    """
+    monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
+    monkeypatch.setattr(resolve_arxiv, "_http_get_json", lambda url, **kw: {"data": [
+        {"title": _LANCET_BIB.split("title = {")[1].split("},")[0],
+         "year": 2025,
+         "externalIds": {"DOI": "10.1016/S0140-6736(25)01917-8",
+                         "CorpusId": 282069313}}]})
+    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: lambda i: _LANCET_BIB)
+
+    store = IdentityStore()
+    bib, source = resolve(_ASKED, None, "batzner2026everyeval",
+                          "year = {2026}", store=store)
+
+    assert source != "DOI (clibib)", "the CV got the global burden of disease"
+    assert "0140-6736" not in (bib or "")
+    record = store.records.get("batzner2026everyeval") or {}
+    assert "doi" not in record, "a rejected crosswalk must not outlive the run"
+    assert record.get("s2") is None
+
+
+def test_a_wrong_doi_already_in_the_store_does_not_resurface(monkeypatch):
+    """The half of the failure the upstream guard cannot reach.
+
+    A DOI does not have to be learned this run to be wrong. It can be sitting in
+    the identity store, learned by the version of this code that had no guard, or
+    typed into orig.bib by hand. On that path S2 is never asked and nothing
+    upstream gets a vote, so the check at the point of use is the only one there
+    is -- without it, one bad run's DOI is permanent and reappears every week.
+    """
+    monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
+    monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
+    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: lambda i: _LANCET_BIB)
+
+    store = IdentityStore()
+    store.record("batzner2026everyeval", doi="10.1016/S0140-6736(25)01917-8")
+    bib, source = resolve(_ASKED, None, "batzner2026everyeval",
+                          "year = {2026}", store=store)
+    assert source == "not found"
+    assert "0140-6736" not in (bib or "")
 
 # ── which DBLP result is accepted ─────────────────────────────────────────────
 
