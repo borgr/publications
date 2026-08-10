@@ -1,8 +1,17 @@
 """Suite-wide guarantees, applied to every test whether it asks or not.
 
-Right now there is one: no test may read the real Semantic Scholar key.
+Two of them. The first: no test may write the repository's own data files. The
+second: no test may read the real Semantic Scholar key.
 
-That is not only about isolation. The key now lives in a file the pipeline reads
+The write guard exists because a test did. A stubbed `IdentityStore.load` still
+hands back a store that saves to the default path, so one `dedupe.main()` run
+under test replaced 1139 lines of harvested crosswalk with the two keys of a
+fixture -- silently, in a passing suite, and only visible in `git status`. The
+same shape is available to any test through `write_table`, `Venues.save`,
+`save_attempts` or `write_citation_rows`: stub the read, forget the write, and the
+suite edits the author's papers.csv while reporting green.
+
+The key guard is not only about isolation. The key now lives in a file the pipeline reads
 on its own, outside the repository, so `s2_api_key()` finds it on the author's
 machine and finds nothing in CI -- which makes any behaviour that depends on it
 pass in one place and fail in the other, for a reason no failure message would
@@ -21,6 +30,63 @@ import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+
+# Everything at the repository root the pipeline writes on its own. A fork has
+# fewer of them, and a missing file is a state worth restoring too: a test that
+# creates papers.csv where there was none leaves the next run reading a fixture.
+_PIPELINE_DATA = (
+    "papers.csv",
+    "orig.bib",
+    "citations.csv",
+    "identity.json",
+    "resolve_attempts.json",
+    "venues.yaml",
+    "profile_stats.json",
+    "WORKLIST.md",
+    ".pipeline_state.json",
+)
+
+
+def _read(name):
+    try:
+        with open(os.path.join(ROOT, name), "rb") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+@pytest.fixture(scope="session")
+def _pipeline_data():
+    """The contents of the pipeline's own files as the suite found them."""
+    return {name: _read(name) for name in _PIPELINE_DATA}
+
+
+@pytest.fixture(autouse=True)
+def _pipeline_data_untouched(_pipeline_data):
+    """Fail any test that writes one of those files, and put it back.
+
+    Restoring rather than only reporting, for two reasons: the damage is to real
+    data the rest of the suite then reads, so one careless test would otherwise
+    cascade into unrelated failures; and the author's working tree is not a
+    scratch space, even when git could recover it.
+    """
+    yield
+    damaged = []
+    for name, before in _pipeline_data.items():
+        if _read(name) == before:
+            continue
+        damaged.append(name)
+        path = os.path.join(ROOT, name)
+        if before is None:
+            os.remove(path)
+        else:
+            with open(path, "wb") as f:
+                f.write(before)
+    if damaged:
+        pytest.fail(
+            f"wrote the repository's own {', '.join(damaged)} (restored). Stub the "
+            f"save as well as the load, or point the module's path constant at "
+            f"tmp_path.")
 
 
 @pytest.fixture(autouse=True)
