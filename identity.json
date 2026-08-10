@@ -332,6 +332,8 @@
     },
     "DBLP:journals/corr/abs-2104-02310": {
       "arxiv": "2104.02310",
+      "dblp": "journals/corr/abs-2104-02310",
+      "s2": "233033934",
       "scholar_id": "8b8IhUYAAAAJ:MXK_kJrjxJIC",
       "titles": [
         "serrantasyntacticclassifierforenglishgrammaticalerrortypes"
@@ -358,6 +360,8 @@
     },
     "DBLP:journals/corr/abs-2106-00745": {
       "arxiv": "2106.00745",
+      "dblp": "journals/corr/abs-2106-00745",
+      "s2": "235293879",
       "scholar_id": "8b8IhUYAAAAJ:ULOm3_A8WrAC",
       "titles": [
         "partofspeechanduniversaldependencyeffectsonenglisharabicmachinetranslation"
@@ -365,6 +369,8 @@
     },
     "DBLP:journals/corr/abs-2108-10763": {
       "arxiv": "2108.10763",
+      "dblp": "journals/corr/abs-2108-10763",
+      "s2": "237263579",
       "scholar_id": "8b8IhUYAAAAJ:YOwf2qJgpHMC",
       "titles": [
         "comsumcommitmessagessummarizationandmeaningpreservation"
@@ -407,7 +413,9 @@
     },
     "DBLP:journals/corr/abs-2205-05730": {
       "arxiv": "2205.05730",
+      "dblp": "journals/corr/abs-2205-05730",
       "doi": "10.48550/arXiv.2205.05730",
+      "s2": "248722100",
       "scholar_id": "8b8IhUYAAAAJ:Wp0gIr-vW9MC",
       "titles": [
         "somegrammaticalerrorsarefrequentothersareimportant"
@@ -564,7 +572,9 @@
     },
     "DBLP:journals/corr/abs-2404-15198": {
       "arxiv": "2404.15198",
+      "dblp": "journals/corr/abs-2404-15198",
       "doi": "10.48550/arXiv.2404.15198",
+      "s2": "269197564",
       "titles": [
         "losslessandnearlosslesscompressionforfoundationmodels"
       ]
@@ -599,6 +609,7 @@
     },
     "DBLP:journals/corr/abs-2407-10944": {
       "arxiv": "2407.10944",
+      "s2": "271212637",
       "scholar_id": "8b8IhUYAAAAJ:uWQEDVKXjbEC",
       "titles": [
         "naturallyoccurringfeedbackiscommonextractableanduseful"
@@ -649,6 +660,9 @@
     },
     "ashury2026errormap": {
       "arxiv": "2601.15812",
+      "dblp": "journals/corr/abs-2601-15812",
+      "doi": "10.48550/arXiv.2601.15812",
+      "s2": "284935616",
       "scholar_id": "8b8IhUYAAAAJ:sSrBHYA8nusC",
       "titles": [
         "errormapanderroratlaschartingthefailurelandscapeoflargelanguagemodels"
@@ -656,6 +670,9 @@
     },
     "ashury2026robustness": {
       "arxiv": "2602.03344",
+      "dblp": "journals/corr/abs-2602-03344",
+      "doi": "10.48550/arXiv.2602.03344",
+      "s2": "285275509",
       "scholar_id": "8b8IhUYAAAAJ:5Ul4iDaHHb8C",
       "titles": [
         "robustnessasanemergentpropertyoftaskperformance"
@@ -681,6 +698,9 @@
     },
     "bandel2026generalagentevaluation": {
       "arxiv": "2602.22953",
+      "dblp": "journals/corr/abs-2602-22953",
+      "doi": "10.48550/arXiv.2602.22953",
+      "s2": "286082826",
       "scholar_id": "8b8IhUYAAAAJ:eflP2zaiRacC",
       "titles": [
         "generalagentevaluation"
@@ -688,6 +708,9 @@
     },
     "batzner2026every": {
       "arxiv": "2606.14516",
+      "dblp": "journals/corr/abs-2606-14516",
+      "doi": "10.48550/arXiv.2606.14516",
+      "s2": "289263834",
       "scholar_id": "8b8IhUYAAAAJ:4MWp96NkSFoC",
       "titles": [
         "everyevaleveraunifyingschemaandcommunityrepositoryforaievaluationresults"
@@ -701,6 +724,9 @@
     },
     "cai2026latent": {
       "arxiv": "2512.06553",
+      "dblp": "journals/corr/abs-2512-06553",
+      "doi": "10.48550/arXiv.2512.06553",
+      "s2": "283693989",
       "scholar_id": "8b8IhUYAAAAJ:4fKUyHm3Qg0C",
       "titles": [
         "alatentvariableframeworkforscalinglawsinlargelanguagemodels"
@@ -708,6 +734,7 @@
     },
     "chang2025globalpiqaevaluatingphysical": {
       "arxiv": "2510.24081",
+      "s2": "288855124",
       "scholar_id": "8b8IhUYAAAAJ:K3LRdlH-MEoC",
       "titles": [
         "globalpiqaevaluatingphysicalcommonsensereasoningacross100languagesandcultures",
@@ -741,6 +768,9 @@
     },
     "choshen2026babylm": {
       "arxiv": "2602.20092",
+      "dblp": "journals/corr/abs-2602-20092",
+      "doi": "10.48550/arXiv.2602.20092",
+      "s2": "285973452",
       "scholar_id": "8b8IhUYAAAAJ:bnK-pcrLprsC",
       "titles": [
         "babylmturns4andgoesmultilingualcallforpapersforthe2026babylmworkshop"
@@ -754,6 +784,9 @@
     },
     "diskind2026cross": {
       "arxiv": "2606.24579",
+      "dblp": "journals/corr/abs-2606-24579",
+      "doi": "10.48550/arXiv.2606.24579",
+      "s2": "289628562",
       "scholar_id": "8b8IhUYAAAAJ:BwyfMAYsbu0C",
       "titles": [
         "crosslingualexplorationforparametricknowledge"
@@ -794,6 +827,7 @@
     },
     "fandina2025safesafetymetricautomatic": {
       "arxiv": "2408.12259",
+      "s2": "271923863",
       "scholar_id": "8b8IhUYAAAAJ:UxriW0iASnsC",
       "titles": [
         "howsafeisyoursafetymetricautomaticconcatenationtestsformetricreliability"
@@ -813,6 +847,9 @@
     },
     "ghosh2026evaluationcardsinterpretivelayer": {
       "arxiv": "2606.09809",
+      "dblp": "journals/corr/abs-2606-09809",
+      "doi": "10.48550/arXiv.2606.09809",
+      "s2": "289098621",
       "scholar_id": "8b8IhUYAAAAJ:ML0RJ9NH7IQC",
       "titles": [
         "evaluationcardsaninterpretivelayerforaievaluationreporting"
@@ -853,6 +890,7 @@
     },
     "hilel2025llm": {
       "arxiv": "2507.02850",
+      "s2": "280148936",
       "titles": [
         "llmhypnosisexploitinguserfeedbackforunauthorizedknowledgeinjectiontoallusers"
       ]
@@ -871,6 +909,9 @@
     },
     "huang2026llmsbenefitwords": {
       "arxiv": "2602.24287",
+      "dblp": "journals/corr/abs-2602-24287",
+      "doi": "10.48550/arXiv.2602.24287",
+      "s2": "286171698",
       "scholar_id": "8b8IhUYAAAAJ:BrmTIyaxlBUC",
       "titles": [
         "dollmsbenefitfromtheirownwords"
@@ -968,6 +1009,9 @@
     },
     "saroufim2025neurips": {
       "arxiv": "2503.13507",
+      "dblp": "journals/corr/abs-2503-13507",
+      "doi": "10.48550/arXiv.2503.13507",
+      "s2": "277104779",
       "scholar_id": "8b8IhUYAAAAJ:1sJd4Hv_s6UC",
       "titles": [
         "neurips2023llmefficiencyfinetuningcompetition"
@@ -1013,6 +1057,9 @@
     },
     "vetzler2025crisp": {
       "arxiv": "2507.08037",
+      "dblp": "journals/corr/abs-2507-08037",
+      "doi": "10.48550/arXiv.2507.08037",
+      "s2": "280252187",
       "scholar_id": "8b8IhUYAAAAJ:OU6Ihb5iCvQC",
       "titles": [
         "crispcomplexreasoningwithinterpretablestepbasedplans"
@@ -1030,6 +1077,9 @@
     },
     "wang2026mindgames": {
       "arxiv": "2605.29512",
+      "dblp": "journals/corr/abs-2605-29512",
+      "doi": "10.48550/arXiv.2605.29512",
+      "s2": "288742058",
       "scholar_id": "8b8IhUYAAAAJ:Z5m8FVwuT1cC",
       "titles": [
         "mindgamesalivearenaforevaluatingsocialandstrategicreasoninginmultiagentllms"
@@ -1079,6 +1129,9 @@
     },
     "zhang2025can": {
       "arxiv": "2506.20989",
+      "dblp": "journals/corr/abs-2506-20989",
+      "doi": "10.48550/arXiv.2506.20989",
+      "s2": "280012277",
       "scholar_id": "8b8IhUYAAAAJ:KxtntwgDAa4C",
       "titles": [
         "cangradientdescentsimulateprompting"
