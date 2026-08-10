@@ -96,7 +96,7 @@ def test_title_is_never_passed_to_clibib(monkeypatch):
     seen = []
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t, y=None: None)
     monkeypatch.setattr(resolve_arxiv, "fetch_arxiv_bib", lambda a, k: "")
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
                         lambda: lambda ident: seen.append(ident) or "@misc{z}")
@@ -109,7 +109,7 @@ def test_doi_lookup_is_skipped_when_clibib_is_absent(monkeypatch):
     """clibib is optional; without it the resolver behaves as it did before."""
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t, y=None: None)
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: None)
     store = IdentityStore()
     store.record("k1", doi="10.1/x")
@@ -176,7 +176,7 @@ def test_the_whole_chain_that_printed_a_lancet_paper_in_the_cv(monkeypatch):
     not of any one link.
     """
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
-    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t, y=None: None)
     monkeypatch.setattr(resolve_arxiv, "_http_get_json", lambda url, **kw: {"data": [
         {"title": _LANCET_BIB.split("title = {")[1].split("},")[0],
          "year": 2025,
@@ -205,7 +205,7 @@ def test_a_wrong_doi_already_in_the_store_does_not_resurface(monkeypatch):
     is -- without it, one bad run's DOI is permanent and reappears every week.
     """
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
-    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t, y=None: None)
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: lambda i: _LANCET_BIB)
 
@@ -319,7 +319,7 @@ def ladder(monkeypatch):
         "query_s2_by_title": lambda t, y="": None,
         "fetch_acl_bib": lambda i, k: None,
         "fetch_openreview_bib": lambda i, k: None,
-        "search_openalex": lambda t: None,
+        "search_openalex": lambda t, y=None: None,
         "fetch_arxiv_bib": lambda a, k, known_title=None: f"@misc{{{k}, arxiv}}",
         "_clibib_fetch": lambda: None,
     }
@@ -337,7 +337,7 @@ def test_an_acl_record_is_preferred_over_openreview_and_openalex(ladder):
     ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
            fetch_acl_bib=_acl_entry,
            fetch_openreview_bib=lambda i, k: pytest.fail("asked OpenReview anyway"),
-           search_openalex=lambda t: pytest.fail("asked OpenAlex anyway"))
+           search_openalex=lambda t, y=None: pytest.fail("asked OpenAlex anyway"))
     bib, source = resolve(_TITLE, None, "k1", "")
     assert source == "ACL Anthology"
     assert "2024.acl-1.1" in bib
@@ -380,7 +380,7 @@ def test_an_acl_entry_for_a_different_paper_is_not_this_paper(ladder):
     """
     ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
            fetch_acl_bib=lambda i, k: _acl_entry(i, k, "Some Entirely Other Paper"),
-           search_openalex=lambda t: None)
+           search_openalex=lambda t, y=None: None)
     bib, source = resolve(_TITLE, None, "k1", "")
     assert source != "ACL Anthology"
     assert "2024.acl-1.1" not in (bib or "")
@@ -400,7 +400,7 @@ def test_a_rejected_rung_lets_a_later_one_answer(ladder):
     the ladder has to carry on to the sources that have not answered yet."""
     ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
            fetch_acl_bib=lambda i, k: _acl_entry(i, k, "Some Entirely Other Paper"),
-           search_openalex=lambda t: {"doi": "https://doi.org/10.1/x"},
+           search_openalex=lambda t, y=None: {"doi": "https://doi.org/10.1/x"},
            openalex_to_bibtex=lambda w, k: (
                f"@article{{{k}, title = {{{_TITLE}}}, journal = {{A Real Journal}}}}",
                True))
@@ -457,7 +457,7 @@ def test_a_source_that_returns_nothing_falls_through_to_the_next(ladder):
                "publicationVenue": {"url": "https://openreview.net/forum?id=AbC"}},
            fetch_acl_bib=lambda i, k: None,
            fetch_openreview_bib=lambda i, k: None,
-           search_openalex=lambda t: {"doi": "https://doi.org/10.1/x"},
+           search_openalex=lambda t, y=None: {"doi": "https://doi.org/10.1/x"},
            openalex_to_bibtex=lambda w, k: (
                f"@article{{{k}, title = {{T}}, journal = {{A Real Journal}}}}", True))
     bib, source = resolve(_TITLE, None, "k1", "")
@@ -465,10 +465,20 @@ def test_a_source_that_returns_nothing_falls_through_to_the_next(ladder):
     assert "A Real Journal" in bib
 
 
+def test_openalex_is_told_which_year_the_paper_is_from(ladder):
+    """Its same-paper test runs inside search_openalex, so a year that does not
+    reach it is a check that does not happen -- and OpenAlex is the rung indexing
+    decades of journals, where a near-identical title from another decade lives."""
+    seen = []
+    ladder(search_openalex=lambda t, y=None: seen.append(y) or None)
+    resolve(_TITLE, None, "k1", "@article{k1, year = {2024}}")
+    assert seen == [2024]
+
+
 def test_an_openalex_preprint_is_labelled_as_one(ladder):
     """OpenAlex indexes preprints alongside published work, and the label is the
     only thing standing between one and an existing published entry."""
-    ladder(search_openalex=lambda t: {"doi": "https://doi.org/10.48550/arXiv.2401.1"},
+    ladder(search_openalex=lambda t, y=None: {"doi": "https://doi.org/10.48550/arXiv.2401.1"},
            openalex_to_bibtex=lambda w, k: (f"@misc{{{k}, title = {{T}}}}", False))
     bib, source = resolve(_TITLE, None, "k1", "")
     assert source == "OpenAlex (preprint)"
@@ -479,7 +489,7 @@ def test_an_openalex_preprint_is_labelled_as_one(ladder):
 def test_an_arxiv_doi_from_openalex_is_not_recorded(ladder):
     """10.48550/... only ever resolves back to the preprint, so recording it
     would make the next run spend a request being rejected by the rank guard."""
-    ladder(search_openalex=lambda t: {"doi": "https://doi.org/10.48550/arXiv.2401.1"},
+    ladder(search_openalex=lambda t, y=None: {"doi": "https://doi.org/10.48550/arXiv.2401.1"},
            openalex_to_bibtex=lambda w, k: (f"@misc{{{k}, title = {{T}}}}", False))
     store = IdentityStore()
     resolve(_TITLE, None, "k1", "", store=store)

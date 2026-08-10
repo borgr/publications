@@ -533,6 +533,15 @@ def _bib_year(bibtex: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _as_year(value) -> int | None:
+    """A year as an int, or None when there is not one to be had. Sources leave the
+    field null on very recent records and occasionally send it as a string."""
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
 # Above this, two titles are the same title, so a publication lag is expected --
 # ComPEFT's journal version is two years after its preprint under an identical
 # title. Below it, agreement on the year is required as well.
@@ -544,6 +553,25 @@ _SAME_TITLE_RATIO = 0.95
 # the Data Provenance Initiative's journal version scores 0.77 against its
 # preprint, and most published versions keep the preprint's title exactly.
 _MIN_TITLE_RATIO = 0.72
+
+# Words whose presence in one title and absence from the other makes two titles two
+# papers, however similar the rest of them is. Character similarity has no notion of
+# meaning, and the four characters that reverse a claim cost almost nothing:
+# "Attention is all you need" and "Attention is not all you need" agree on 93% of
+# their characters, are a year apart, and are a paper and a rebuttal of it. Titles
+# like that are common enough in this field that a search for either can return the
+# other, and every ratio in this file accepts the pair.
+_NEGATIONS = frozenset({
+    "not", "no", "never", "nor", "neither", "none", "without",
+    "cannot", "cant", "dont", "doesnt", "isnt", "arent", "wont",
+})
+
+
+def _negations(title: str) -> frozenset:
+    """The negating words a title uses. Apostrophes are dropped, so that "isn't"
+    and "isnt" are one word and neither reads as "isn" plus "t"."""
+    words = re.findall(r"[a-z]+", re.sub(r"['’]", "", title.lower()))
+    return frozenset(w for w in words if w in _NEGATIONS)
 
 
 def titles_agree(query_title: str, found_title: str,
@@ -558,6 +586,10 @@ def titles_agree(query_title: str, found_title: str,
     Models", a different paper three years later. So a merely-similar title also
     has to agree on the year.
 
+    And where a ratio cannot tell two papers apart at all, it is not asked to: a
+    title that negates what the other asserts is a different paper at any
+    similarity, so the two have to agree on their negations first.
+
     One definition, shared by every source that answers a title with its best
     guess rather than with a match. DBLP had it and Semantic Scholar's title
     search did not, which is the whole distance between the two: S2 answered
@@ -567,6 +599,8 @@ def titles_agree(query_title: str, found_title: str,
     territories".
     """
     if not query_title or not found_title:
+        return False
+    if _negations(query_title) != _negations(found_title):
         return False
     ratio = difflib.SequenceMatcher(
         None, _simplify_title(query_title), _simplify_title(found_title),
@@ -676,14 +710,6 @@ def query_s2_by_arxiv(arxiv_id: str) -> dict | None:
     return _http_get_json(url)
 
 
-def _s2_year(candidate: dict) -> int | None:
-    """S2 leaves `year` null on very recent records and occasionally sends a string."""
-    try:
-        return int(candidate.get("year"))
-    except (ValueError, TypeError):
-        return None
-
-
 def query_s2_by_title(title: str, year: str = "") -> dict | None:
     """S2's record for a paper found by title, or None if none of its answers is it.
 
@@ -710,7 +736,7 @@ def query_s2_by_title(title: str, year: str = "") -> dict | None:
     query_year = int(year) if str(year).strip().isdigit() else None
     same_paper = [c for c in data["data"]
                   if titles_agree(title, c.get("title") or "",
-                                  query_year, _s2_year(c))]
+                                  query_year, _as_year(c.get("year")))]
     if not same_paper:
         return None
     # Among records of the same paper -- typically the preprint and the published
@@ -718,7 +744,7 @@ def query_s2_by_title(title: str, year: str = "") -> dict | None:
     # published DOI and venue that the rest of the ladder is after.
     if query_year:
         for candidate in same_paper:
-            found = _s2_year(candidate)
+            found = _as_year(candidate.get("year"))
             if found is not None and abs(found - query_year) <= 1:
                 return candidate
     return same_paper[0]
@@ -778,17 +804,21 @@ def fetch_openreview_bib(forum_id: str, original_key: str) -> str | None:
 #
 # Two queries, because they behave differently: `filter=title.search:` is a
 # phrase filter over titles and finds exact papers the fuzzy `search` param
-# misses; `search` is broader and catches the rest. Both are gated on a strict
-# title-similarity check, because OpenAlex happily returns an unrelated paper
-# rather than nothing -- "MuLER: Detailed and Scalable Reference-based
-# Evaluation" came back as "Regional climate modeling on European scales".
+# misses; `search` is broader and catches the rest. Both are gated on the same
+# same-paper test as every other source, because OpenAlex happily returns an
+# unrelated paper rather than nothing -- "MuLER: Detailed and Scalable
+# Reference-based Evaluation" came back as "Regional climate modeling on European
+# scales".
+#
+# That test used to be a second, private one: a bare 0.90 similarity, with no year
+# and no negation check. It was stricter in the one dimension it had and blind in
+# the other two, so OpenAlex was the one rung that would take a 0.92-similar paper
+# from a decade earlier and reject the retitled journal version it is in the ladder
+# to find -- the Data Provenance Initiative's scores 0.77 against its preprint.
 
 OPENALEX_WORKS = "https://api.openalex.org/works"
 _OPENALEX_SELECT = ("id,title,doi,type,publication_year,authorships,"
                     "primary_location,biblio")
-
-# Below this title similarity an OpenAlex result is a different paper.
-_OPENALEX_MIN_RATIO = 0.90
 
 
 def _openalex_query(url):
@@ -801,8 +831,8 @@ def _openalex_query(url):
         return []
 
 
-def search_openalex(title):
-    """Return the OpenAlex work matching `title`, or None."""
+def search_openalex(title, query_year: int | None = None):
+    """Return the OpenAlex work that is a version of `title`, or None."""
     if len(normalize_text(title)) < 10:
         return None
     mailto = ""
@@ -821,10 +851,8 @@ def search_openalex(title):
     ]
     for url in urls:
         for work in _openalex_query(url):
-            ratio = difflib.SequenceMatcher(
-                None, _simplify_title(title), _simplify_title(work.get("title") or "")
-            ).ratio()
-            if ratio >= _OPENALEX_MIN_RATIO:
+            if titles_agree(title, work.get("title") or "", query_year,
+                            _as_year(work.get("publication_year"))):
                 return work
     return None
 
@@ -1151,7 +1179,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     # the ACL Anthology do not. Its result may itself be a preprint, so the label
     # distinguishes the two: only the published one is allowed to replace an
     # existing entry.
-    work = search_openalex(title)
+    work = search_openalex(title, query_year)
     if work:
         bib, is_published = openalex_to_bibtex(work, original_key)
         if bib:

@@ -697,6 +697,46 @@ def test_curl_pacing_is_per_host(monkeypatch):
     assert slept == []
 
 
+# ── the same-paper test every source is held to ──────────────────────────────
+#
+# One definition, because the sources it guards are not distinguishable in the way
+# that matters: DBLP, Semantic Scholar and OpenAlex all answer a title query with a
+# ranked best guess, and a DOI or an ACL ID handed over by one of them is only as
+# good as the guess it came from.
+
+def test_a_title_that_says_the_opposite_is_a_different_paper():
+    """0.93 similar, a year apart, and a paper and a rebuttal of it. Titles like
+    these are common enough in this field that a search for either can return the
+    other, and every similarity threshold in the file accepts the pair."""
+    assert not ra.titles_agree("Attention is all you need",
+                               "Attention is not all you need", 2017, 2018)
+
+
+def test_agreeing_on_the_negation_is_enough_to_be_judged_on_the_ratio():
+    """The test is that the two titles negate the same things, not that neither
+    negates anything."""
+    assert ra.titles_agree("Language models are not few-shot learners",
+                           "Language models are not few-shot learners: a reply",
+                           2021, 2021)
+
+
+def test_an_apostrophe_does_not_hide_a_negation():
+    assert not ra.titles_agree("Scaling laws that don't hold for small models",
+                               "Scaling laws that hold for small models",
+                               2024, 2024)
+
+
+def test_a_retitled_published_version_is_still_the_same_paper():
+    """The measured case the 0.72 floor was set for, and now the case OpenAlex is
+    in the ladder to catch: the Data Provenance Initiative's journal version
+    against its preprint."""
+    assert ra.titles_agree(
+        "The Data Provenance Initiative: A Large Scale Audit of Dataset "
+        "Licensing & Attribution in AI",
+        "A large-scale audit of dataset licensing and attribution in AI",
+        2024, 2025)
+
+
 # ── DBLP ─────────────────────────────────────────────────────────────────────
 
 def test_dblp_results_are_split_into_entries(monkeypatch):
@@ -1159,6 +1199,33 @@ def test_a_short_title_is_never_searched(monkeypatch):
     assert ra.search_openalex("NLP") is None
 
 
+def test_openalex_is_held_to_the_same_same_paper_test_as_the_others(monkeypatch):
+    """It used to have a private one -- a bare 0.90 similarity, no year and no
+    negation -- which made it the one rung that would take a nearly-identically
+    titled paper from a decade earlier."""
+    curl(monkeypatch, {"api.openalex.org": _results(_work(
+        title="A Long Enough Paper Title, Revisited", publication_year=2011))})
+    assert ra.search_openalex("A Long Enough Paper Title", 2024) is None
+
+
+def test_openalex_accepts_the_retitled_journal_version(monkeypatch):
+    """What OpenAlex is in the ladder for: it indexes the journals, which is where
+    a paper gets retitled. The old 0.90 floor rejected exactly these."""
+    curl(monkeypatch, {"api.openalex.org": _results(_work(
+        title="A large-scale audit of dataset licensing and attribution in AI",
+        publication_year=2025))})
+    assert ra.search_openalex(
+        "The Data Provenance Initiative: A Large Scale Audit of Dataset "
+        "Licensing & Attribution in AI", 2024) is not None
+
+
+def test_the_years_agreement_is_only_asked_for_when_there_is_a_year(monkeypatch):
+    """Part B rows are resolved from a table row with no bib entry to read a year
+    from, so most OpenAlex lookups pass None and are decided on the title alone."""
+    curl(monkeypatch, {"api.openalex.org": _results(_work(publication_year=2011))})
+    assert ra.search_openalex("A Long Enough Paper Title") is not None
+
+
 def test_the_broad_search_is_tried_when_the_phrase_filter_finds_nothing(monkeypatch):
     """Two different queries, not a retry: `filter=title.search:` is a phrase
     filter and `search` is fuzzy, and each finds papers the other misses."""
@@ -1330,7 +1397,7 @@ def test_resolve_hands_the_title_to_the_fallback(monkeypatch):
     """The end-to-end version of the same failure."""
     monkeypatch.setattr(ra, "search_dblp", lambda t: [])
     monkeypatch.setattr(ra, "query_s2_by_arxiv", lambda i: None)
-    monkeypatch.setattr(ra, "search_openalex", lambda t: None)
+    monkeypatch.setattr(ra, "search_openalex", lambda t, y=None: None)
     monkeypatch.setattr(ra, "_clibib_fetch", lambda: None)
     monkeypatch.setattr(ra, "_curl_get", lambda url: "")
     bib, source = ra.resolve("A Paper With A Long Enough Title", "2401.00001", "k1")

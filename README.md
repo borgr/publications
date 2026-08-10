@@ -391,13 +391,20 @@ of 0.86, and the CV printed it.
 
 ### An answer is not a match
 
-Every source in the ladder answers a question it was asked, and two of them will
-answer it with something else if they have nothing: DBLP and Semantic Scholar both
-run *relevance* searches, ranked, always non-empty. So an entry is only accepted
-when it is a version of the paper that was asked for —
-`resolve_arxiv.titles_agree`: normalized title similarity of at least 0.72, and
-short of 0.95 the year has to agree too, since difflib rewards a long common
-subsequence however much extra text there is.
+Every source in the ladder answers a question it was asked, and three of them will
+answer it with something else if they have nothing: DBLP, Semantic Scholar and
+OpenAlex all run *relevance* searches, ranked, always non-empty. So an entry is only
+accepted when it is a version of the paper that was asked for —
+`resolve_arxiv.titles_agree`: the two titles have to negate the same things,
+normalized similarity has to be at least 0.72, and short of 0.95 the year has to
+agree too, since difflib rewards a long common subsequence however much extra text
+there is.
+
+The negation test is there because character similarity has no notion of meaning
+and the four characters that reverse a claim cost nothing: *"Attention is all you
+need"* and *"Attention is not all you need"* are 93% identical, a year apart, and a
+paper and a rebuttal of it. Titles like that are common enough here that a search
+for either can return the other.
 
 Resolving by identifier is exact, which is not the same as being right — the
 *identifier* can be wrong, and then what comes back is a real, well-formed,
@@ -406,8 +413,14 @@ OpenReview rungs check their entry as well, not just their lookup. Every one of
 those identifiers arrives from somewhere: `externalIds` on an S2 record, a store
 record an earlier run wrote, a URL in the existing entry.
 
-That is one rule in one function, applied at every point where an entry is
-produced, because it took only one unguarded rung to publish the wrong paper: an
+One rule in one function, applied at every point where an entry is produced.
+OpenAlex used to keep a private second copy of the idea — a bare 0.90 similarity,
+with no year and no negation test — which made it both stricter and blinder than
+the shared rule: it would take a 0.92-similar paper from another decade, and reject
+the retitled journal version it is in the ladder to find.
+
+The single rule matters because it took only one unguarded rung to publish the
+wrong paper: an
 unchecked S2 title search answered "Every eval ever: Toward a common language for
 AI eval reporting" with a Lancet epidemiology paper, its DOI became that paper's
 known DOI, clibib resolved it exactly, and the CV listed "Global burden of 292
