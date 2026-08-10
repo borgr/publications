@@ -232,6 +232,40 @@ def test_the_published_version_wins_and_the_preprint_is_suppressed(monkeypatch):
     assert notes and notes[0][0] == "published" and notes[0][1] == ["preprint"]
 
 
+def test_two_rows_titled_identically_suppress_the_preprint(monkeypatch):
+    """The tests above spell the duplicate two ways ("Same Paper" / "Same  paper"),
+    which is not the common case: the common case is one title entered twice.
+
+    A group of the same string twice used to be looked up once per member and hit
+    the same row both times, so the published entry was ranked against itself,
+    named the winner and added to `suppressed` -- and since the preprint's row was
+    never consulted, the CV printed the arXiv version of a paper whose ACL entry
+    was in the table, with a note reading "published beats published".
+    """
+    monkeypatch.setattr(build_bib.IdentityStore, "load",
+                        classmethod(lambda cls, path=None: IdentityStore()))
+    parsed = parse_bibtex(
+        "@inproceedings{published,\n title={Same Paper},\n booktitle={ACL},\n}\n"
+        "@misc{preprint,\n title={Same Paper},\n eprint={2401.00001},\n}\n")
+    df = table({"Name": "Same Paper", "Bib": "published"},
+               {"Name": "Same Paper", "Bib": "preprint"})
+    suppressed, notes = build_bib.resolve_duplicate_rows(parsed, df)
+    assert suppressed == {"preprint"}
+    assert notes and notes[0][0] == "published" and notes[0][1] == ["preprint"]
+
+
+def test_two_rows_sharing_one_entry_suppress_nothing(monkeypatch):
+    """One entry cannot outrank itself, and suppressing it would drop the paper
+    from the CV rather than the duplicate. `_report_duplicates` raises the shared
+    Bib cell instead, which is a table problem with a table fix."""
+    monkeypatch.setattr(build_bib.IdentityStore, "load",
+                        classmethod(lambda cls, path=None: IdentityStore()))
+    df = table({"Name": "Same Paper", "Bib": "p1"}, {"Name": "Same  paper", "Bib": "p1"})
+    suppressed, notes = build_bib.resolve_duplicate_rows(
+        parse_bibtex(bib(("p1", ""))), df)
+    assert suppressed == set() and notes == []
+
+
 def test_one_row_per_paper_suppresses_nothing(monkeypatch):
     monkeypatch.setattr(build_bib.IdentityStore, "load",
                         classmethod(lambda cls, path=None: IdentityStore()))

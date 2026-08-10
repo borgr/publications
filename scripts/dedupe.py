@@ -42,14 +42,26 @@ from identity import (
     join_citations,
     merge_overlapping_groups,
 )
-from table_io import read_table, write_table
+from table_io import bib_key, read_table, rows_named, write_table
 
 BIB_PATH = os.path.join(ROOT, "orig.bib")
 CITATIONS_CSV = os.path.join(ROOT, "citations.csv")
 
 
-def citation_effect(df, drop_names):
-    """What happens to citation counts if `drop_names` are removed.
+def keep_mask(df, dropped_rows):
+    """Which rows survive, given the (name, key) pairs being dropped.
+
+    By row rather than by name. `df["Name"].isin(...)` removes *every* row with a
+    dropped row's title, and when the duplicate was two rows sharing one title
+    that is both of them: the merge deleted the paper it was merging.
+    """
+    return [(str(row.get("Name") or "").strip(), bib_key(row.get("Bib")))
+            not in dropped_rows
+            for _, row in df.iterrows()]
+
+
+def citation_effect(df, dropped_rows):
+    """What happens to citation counts if `dropped_rows` are removed.
 
     Returns (carried, orphaned). A removed row may be the only title a Scholar
     record matches, in which case its citations would land nowhere -- so the
@@ -64,7 +76,7 @@ def citation_effect(df, drop_names):
         return {}, []
     store = IdentityStore.load()
     before = join_citations(rows, sorted(set(df["Name"].dropna())), store=store)
-    kept = df[~df["Name"].isin(drop_names)]
+    kept = df[keep_mask(df, dropped_rows)]
     after = join_citations(rows, sorted(set(kept["Name"].dropna())), store=store)
 
     total_before = sum(v for v in before.matched.values() if v)
@@ -120,46 +132,53 @@ def plan(df, bib_text):
     # comparison misses, and it is a stronger claim about sameness.
     name_by_key = {}
     for _, row in df.iterrows():
-        key = str(row.get("Bib") or "").strip()
-        if key and key.lower() not in ("nan", "none"):
+        key = bib_key(row.get("Bib"))
+        if key:
             name_by_key[key] = str(row.get("Name") or "")
     keys_in_use = set(name_by_key)
     store = IdentityStore.load()
 
-    def _names(keys):
-        return [name_by_key[k] for k in keys if k in name_by_key]
+    # A group member is one table row, as (name, key). Not a bare name: two rows
+    # can carry the identical name, and a group of names then collapses to a
+    # single member, which is how the plainest duplicate of all -- one paper
+    # pasted in twice under one spelling -- was reported as nothing to fix.
+    def _rows(keys):
+        return [(name_by_key[k], k) for k in keys if k in name_by_key]
 
     groups = []
     for keys in duplicate_groups_by_identifier(store, keys_in_use):
-        groups.append(_names(keys))
+        groups.append(_rows(keys))
     # And from the entries themselves, which need no accumulated state to be
     # right. The store misses any paper whose entry never went through
     # resolution, and four papers were reaching the CV twice because of it.
     for keys in duplicate_groups_by_bib_identifier(bib_text, keys_in_use):
-        groups.append(_names(keys))
-    groups.extend(find_duplicate_titles(df["Name"].dropna()).values())
+        groups.append(_rows(keys))
+    for names in find_duplicate_titles(df["Name"].dropna()).values():
+        groups.append(rows_named(df, names))
     # One paper, one decision: the detectors overlap by design, and two
     # overlapping groups can otherwise each nominate a different survivor.
     groups = merge_overlapping_groups(groups)
 
     # Reported, never applied -- see the docstring. Anything the evidence above
     # already covers is dropped from the report rather than raised twice.
-    proven = {n for g in groups for n in g}
+    proven = {row for group in groups for row in group}
     suspected = []
     for keys in duplicate_groups_by_any_known_title(name_by_key, bib_text):
-        names = _names(keys)
-        if len(names) > 1 and not set(names) & proven:
-            suspected.append([(n, k) for n, k in zip(names, keys)])
+        rows = _rows(keys)
+        if len(rows) > 1 and not set(rows) & proven:
+            suspected.append(rows)
 
-    for names in groups:
-        if len(names) < 2:
+    for rows in groups:
+        if len(rows) < 2:
             continue
         candidates = []
-        for name in names:
-            cell = df[df["Name"] == name]["Bib"]
-            key = str(cell.iloc[0]).strip() if len(cell) else ""
-            entry = by_key.get(key) if key and key.lower() not in ("nan", "none") else None
-            candidates.append((name, key, entry))
+        for name, key in rows:
+            entry = by_key.get(key)
+            # A copy per row, so no two candidates hold the same object. Two rows
+            # can share a key, and then the identity lookups below resolve both
+            # the winner and the loser to the first of them -- making the row its
+            # own loser, and the drop a delete of the paper.
+            candidates.append((name, key, dict(entry) if entry is not None else None))
 
         rankable = [(n, k, e) for n, k, e in candidates if e is not None]
         if len(rankable) < 2:
@@ -239,11 +258,11 @@ def _why(winner, loser):
             f"@{loser['type']} at {publication_rank(loser)}")
 
 
-def main():
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     df = read_table()
     with open(BIB_PATH) as f:
@@ -284,9 +303,9 @@ def main():
         print("\n(dry-run: table not modified)")
         return 0
 
-    drop_names = {loser[0] for loser, _, _ in drops}
+    dropped_rows = {(loser[0], loser[1]) for loser, _, _ in drops}
 
-    totals, orphaned = citation_effect(df, drop_names)
+    totals, orphaned = citation_effect(df, dropped_rows)
     if orphaned:
         print(f"\nREFUSING to remove: {len(orphaned)} Scholar record(s) would "
               f"lose their only matching row, and their citations with them:")
@@ -305,7 +324,7 @@ def main():
               f"so their citations follow the merge.")
 
     before = len(df)
-    kept = df[~df["Name"].isin(drop_names)]
+    kept = df[keep_mask(df, dropped_rows)]
     write_table(kept)
     print(f"\nRemoved {before - len(kept)} row(s) → papers.csv now has {len(kept)}.")
     print("The dropped rows' BibTeX entries are left in orig.bib; they are simply "

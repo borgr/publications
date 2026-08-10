@@ -392,6 +392,17 @@ step 3 (never downgrade), by the build (emit the version of record), and by
 Duplicates are found by **identifier** as well as by title, which catches the
 retitled ones no title comparison can.
 
+### A name is not a row
+
+A duplicate group is a set of table **rows** — `(title, key)` pairs from
+`table_io.rows_named` — not a set of titles. The commonest duplicate is one title
+entered twice, and a group of titles collapses that to a single member: the build
+then ranked the row's entry against itself, declared it the winner and suppressed
+it, so the CV printed the arXiv version of a paper whose ACL entry was sitting in
+the table, with a note reading "published beats published". `dedupe` reported the
+same pair as nothing to fix, and its removal matched rows by title — which for two
+rows sharing one title deleted both, the merge removing the paper it was merging.
+
 A mis-resolution is a different problem from a duplicate, and is never fixed
 automatically: a duplicate is provable and safe to drop, while an entry pointing at
 the *wrong* paper has to be looked at. The cheap test is whether the entry credits

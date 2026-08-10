@@ -37,6 +37,7 @@ from identity import (
     join_citations,
 )
 from resolve_arxiv import load_attempts
+from table_io import rows_named
 from venues import Venues
 
 WORKLIST_PATH = os.path.join(ROOT, "WORKLIST.md")
@@ -186,14 +187,15 @@ def gather():
     if dup_rows:
         lines = []
         for group in dup_rows.values():
-            keys = []
-            for name in group:
-                cell = df[df["Name"] == name]["Bib"]
-                key = str(cell.iloc[0]) if len(cell) else "?"
-                keys.append(f"`{key}`")
-            lines.append(f"- Same paper on {len(group)} rows ({', '.join(keys)}):")
-            for name in group:
-                lines.append(f"  - {name}")
+            # One (name, key) per row. Looking each name up separately reads the
+            # same row twice when both rows carry the identical title, and this
+            # list is what the author reads to decide which key to delete -- it
+            # named the surviving key twice and never mentioned the other.
+            rows = rows_named(df, group)
+            keys = ", ".join(f"`{key or '?'}`" for _name, key in rows)
+            lines.append(f"- Same paper on {len(rows)} rows ({keys}):")
+            for name, key in rows:
+                lines.append(f"  - {name} — `{key or '?'}`")
         sections.append(Section(
             f"Duplicate rows in the publications table ({len(dup_rows)})",
             "Two rows for one paper means both compete for the same citation "

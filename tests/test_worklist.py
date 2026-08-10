@@ -105,6 +105,23 @@ def test_two_rows_for_one_paper_are_reported_with_both_keys(wl, monkeypatch):
     assert "`k1`" in body and "`k2`" in body
 
 
+def test_two_rows_titled_identically_are_reported_with_both_keys(wl, monkeypatch):
+    """The test above spells the duplicate two ways, which hides the common case:
+    one title entered twice. A group is then the same string twice, and looking
+    each member up by name read the same row both times -- so this list, the only
+    thing telling the author which key to delete, named the surviving key twice
+    and never mentioned the other one at all.
+    """
+    monkeypatch.setattr(worklist, "read_df", lambda: table(
+        {"Name": "Same Paper", "Bib": "k1"}, {"Name": "Same Paper", "Bib": "k2"}))
+    section = only(worklist.gather()[0])
+    body = "\n".join(section.lines)
+    assert "2 rows" in body
+    assert "`k1`" in body and "`k2`" in body
+    assert body.count("Same Paper — `k1`") == 1
+    assert body.count("Same Paper — `k2`") == 1
+
+
 def test_a_duplicate_bibtex_key_is_reported(wl, monkeypatch):
     (wl / "orig.bib").write_text(
         "@misc{dup, title={A}}\n@misc{dup, title={B}}\n")

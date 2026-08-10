@@ -132,6 +132,34 @@ def validate(df, strict=False):
     return problems
 
 
+def bib_key(value):
+    """The Bib cell as a BibTeX key, or "" if the cell is empty.
+
+    Blank, NaN and the strings "nan"/"none" a spreadsheet round-trip leaves
+    behind all mean the same thing: this row has no entry yet.
+    """
+    return _clean(value) or ""
+
+
+def rows_named(df, names):
+    """One (name, bib_key) per *row* whose Name is in `names`, in table order.
+
+    `find_duplicate_titles` returns raw names, and a group can be one name twice
+    -- two rows entered under the identical spelling, the plainest duplicate
+    there is. Looking each name up and taking `.iloc[0]` then reads the same row
+    once per member, so the group's second key is never seen. Both callers did
+    that, and both got the answer exactly backwards: `resolve_duplicate_rows`
+    ranked one entry against itself, named it the winner and suppressed it, so
+    the CV printed the arXiv version of a paper whose ACL entry was in the table;
+    and `dedupe` saw a one-member group and reported nothing to fix.
+    """
+    wanted = {str(n).strip() for n in names if str(n).strip()}
+    return [(name, bib_key(row.get("Bib")))
+            for _, row in df.iterrows()
+            for name in [str(row.get("Name") or "").strip()]
+            if name in wanted]
+
+
 def column_order(df):
     """Preserve the author's column order; append anything new at the end."""
     return list(df.columns)

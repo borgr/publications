@@ -21,6 +21,7 @@ from identity import (
     find_duplicate_titles,
     join_citations,
 )
+from table_io import rows_named
 from venues import Venues
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -407,14 +408,17 @@ def resolve_duplicate_rows(parsed, df):
                       publication_rank(winner)))
 
     for names in find_duplicate_titles(df["Name"].dropna()).values():
-        entries, rows_without_entry = [], []
-        for name in names:
-            cell = df[df["Name"] == name]["Bib"]
-            key = str(cell.iloc[0]).strip() if len(cell) else ""
-            if key and key in by_key:
-                entries.append(by_key[key])
-            else:
-                rows_without_entry.append(name)
+        # One entry per row, and each key at most once: ranking an entry against
+        # itself makes it its own loser, and suppressing it drops the paper from
+        # the CV instead of the duplicate. Two rows sharing a key are one entry
+        # here, so the group falls below two and nothing is suppressed --
+        # `_report_duplicates` raises that case, which needs a table fix rather
+        # than an output one.
+        keys = []
+        for _name, key in rows_named(df, names):
+            if key in by_key and key not in keys:
+                keys.append(key)
+        entries = [by_key[k] for k in keys]
         if len(entries) < 2:
             continue
         winner, losers = choose_published(entries)
