@@ -29,7 +29,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 
 FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, FILE_DIR)
@@ -58,6 +57,7 @@ from resolve_arxiv import (
     _DEPRIORITIZE_AFTER,
     UNANSWERED,
     load_attempts,
+    prefetch_s2_by_arxiv,
     reset_unanswered_lookups,
     resolve,
     save_attempts,
@@ -429,6 +429,19 @@ def step3_resolve(dry_run: bool) -> tuple:
         save_attempts(attempts)
         store.save()
 
+    # One request for every arXiv ID before resolving any of them, so that the
+    # ladder's Semantic Scholar rung is answered from memory. This is the run the
+    # batch exists for: on the first weekly run with an API key, S2 was asked
+    # per paper, refused twice, went into cooldown, and 32 of the remaining 34
+    # lookups were never attempted -- taking the ACL Anthology and OpenReview with
+    # it, since both are reached through its externalIds.
+    #
+    # Part B below cannot be covered: those rows have no arXiv ID, which is why
+    # they are looked up by title.
+    n_prefetched = prefetch_s2_by_arxiv(_get_arxiv_id(e) for e in arxiv_entries)
+    if n_prefetched:
+        print(f"  Semantic Scholar answered for {n_prefetched} of them in one request")
+
     updates = []
     for i, entry in enumerate(arxiv_entries, 1):
         key      = entry["item_name"]
@@ -448,7 +461,6 @@ def step3_resolve(dry_run: bool) -> tuple:
         updates.append((key, bib, source))
         if i % 10 == 0:
             _checkpoint()
-        time.sleep(0.5)
 
     # Part B: table rows with no usable entry in orig.bib
     missing_entries = sort_by_attempts(get_missing_bib_entries(bib_text), attempts)
@@ -474,7 +486,6 @@ def step3_resolve(dry_run: bool) -> tuple:
             not_found.append((entry["title"][:70], key))
         if i % 10 == 0:
             _checkpoint()
-        time.sleep(0.5)
 
     save_attempts(attempts)
     store.save()

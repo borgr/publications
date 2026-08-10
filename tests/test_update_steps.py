@@ -463,9 +463,10 @@ def step3(tmp_path, monkeypatch):
     """
     bib = tmp_path / "orig.bib"
     monkeypatch.setattr(update, "BIB_PATH", str(bib))
-    monkeypatch.setattr(update.time, "sleep", lambda _s: None)
-    # Module-global, and main() is what resets it in a real run.
-    monkeypatch.setitem(resolve_arxiv._net_state, "unanswered", 0)
+    # Stubbed rather than left live: it is the one thing in this step that talks to
+    # a source before `resolve` is patched out. Its own tests are in
+    # test_resolve_sources.py; here it must only not reach the network.
+    monkeypatch.setattr(update, "prefetch_s2_by_arxiv", lambda ids: 0)
     saved = {"attempts": [], "store": 0, "keys": {}}
     monkeypatch.setattr(update, "save_attempts",
                         lambda a: saved["attempts"].append(dict(a)))
@@ -646,6 +647,39 @@ def test_the_resolver_gets_the_arxiv_id_and_the_existing_entry(step3):
         return ("", "not found")
     step3(text, resolver=resolver)
     assert seen == [("A Paper", "2401.00001", "k1", True)]
+
+
+def test_semantic_scholar_is_asked_about_every_arxiv_id_up_front(step3, monkeypatch):
+    """This step, not resolve_arxiv.main(), is what the weekly run executes.
+
+    The batch was written and tested against main() first, where it did nothing for
+    the run that motivated it -- the one that asked S2 per paper, was refused twice,
+    and never attempted 32 of its remaining 34 lookups. A prefetch wired into the
+    path nobody runs is the same as no prefetch, and looks identical in a green
+    suite.
+    """
+    asked = []
+    monkeypatch.setattr(update, "prefetch_s2_by_arxiv",
+                        lambda ids: asked.append(list(ids)) or len(asked[-1]))
+    text = (_ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001")
+            + _ARXIV_ENTRY.format(key="k2", title="Another Paper", eprint="2402.00002"))
+    step3(text)
+    assert asked == [["2401.00001", "2402.00002"]], "one request, before any resolving"
+
+
+def test_a_dry_run_does_not_ask_semantic_scholar_either(tmp_path, monkeypatch):
+    """A dry run answers "what would change" and must not spend the run's request
+    budget to do it -- the batch is one request, but it is still a request."""
+    bib = tmp_path / "orig.bib"
+    bib.write_text(_ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001"))
+    monkeypatch.setattr(update, "BIB_PATH", str(bib))
+    monkeypatch.setattr(update, "load_attempts", lambda: {})
+    monkeypatch.setattr(update.IdentityStore, "load",
+                        classmethod(lambda cls, path=None: IdentityStore()))
+    monkeypatch.setattr(update, "get_missing_bib_entries", lambda text: [])
+    monkeypatch.setattr(update, "prefetch_s2_by_arxiv",
+                        lambda ids: pytest.fail("asked S2 during a dry run"))
+    update.step3_resolve(True)
 
 
 def test_a_deprioritised_entry_is_announced(step3, capsys):
