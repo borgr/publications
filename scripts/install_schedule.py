@@ -34,11 +34,18 @@ LOG_DIR = os.path.expanduser("~/Library/Logs")
 def build_plist(day, hour, minute):
     return {
         "Label": LABEL,
+        # This interpreter, and this checkout's update.py. Resolved rather than
+        # written down, so a fork installs its own copy with its own virtualenv
+        # and nothing here needs editing.
         "ProgramArguments": [sys.executable, os.path.join(ROOT, "update.py")],
         "WorkingDirectory": ROOT,
+        # launchd runs a missed calendar job when the machine wakes, so a laptop
+        # asleep at 08:37 on Monday still updates. A machine that was powered off
+        # does not: the run is simply missed, and the following week's picks up
+        # everything, because every step is driven by content rather than by time.
         "StartCalendarInterval": {"Weekday": day, "Hour": hour, "Minute": minute},
-        # Run at the next opportunity if the machine was asleep at the scheduled
-        # time. Without this a laptop that is shut on Mondays never updates.
+        # Not at load: installing the schedule, or logging in, must not start a
+        # Scholar scrape. `launchctl start` below is how you ask for one on purpose.
         "RunAtLoad": False,
         "StandardOutPath": os.path.join(LOG_DIR, f"{LABEL}.log"),
         "StandardErrorPath": os.path.join(LOG_DIR, f"{LABEL}.err"),
@@ -55,7 +62,40 @@ def cron_equivalent(day, hour, minute):
             f">> ~/publications-update.log 2>&1")
 
 
-def main():
+# Weekday 7 is Sunday as well as 0, which launchd accepts and some crontabs
+# document, so it is allowed here too.
+_RANGES = {"day": (0, 7), "hour": (0, 23), "minute": (0, 59)}
+
+
+def out_of_range(day, hour, minute) -> list:
+    """Which of the three values launchd would not schedule.
+
+    Worth checking rather than passing through, because the failure is silent in
+    both directions: launchd takes a plist with Hour 25 without complaining and
+    then never fires it, and this script would have printed "Runs every Monday at
+    25:37" on the way out. A schedule that never runs looks exactly like a
+    schedule that runs and finds nothing to do -- for weeks, until someone
+    notices the CV stopped moving.
+    """
+    return [f"--{name} must be {low}-{high}, not {value}"
+            for name, value in (("day", day), ("hour", hour), ("minute", minute))
+            for low, high in [_RANGES[name]]
+            if not low <= value <= high]
+
+
+def is_registered(label: str = LABEL) -> bool:
+    """Whether launchd actually knows about the job.
+
+    `launchctl load` exits 0 in cases where it has done nothing at all -- it is
+    deprecated in favour of `bootstrap`, and on a machine where the job is already
+    loaded, or where the plist was rejected, the exit status is not the answer.
+    The answer is whether launchd lists it afterwards.
+    """
+    return subprocess.run(["launchctl", "list", label],
+                          capture_output=True).returncode == 0
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--day", type=int, default=1, metavar="0-6",
@@ -66,7 +106,7 @@ def main():
                              "crowd hitting Scholar at once")
     parser.add_argument("--show", action="store_true", help="Print, do not install")
     parser.add_argument("--uninstall", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.uninstall:
         if not os.path.exists(PLIST_PATH):
@@ -76,6 +116,12 @@ def main():
         os.unlink(PLIST_PATH)
         print(f"Removed {PLIST_PATH}")
         return 0
+
+    problems = out_of_range(args.day, args.hour, args.minute)
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        return 1
 
     plist = build_plist(args.day, args.hour, args.minute)
 
@@ -96,6 +142,12 @@ def main():
                           capture_output=True, text=True)
     if load.returncode != 0:
         print(f"launchctl load failed: {load.stderr.strip()}", file=sys.stderr)
+        return 1
+    if not is_registered():
+        print(f"launchctl load reported success but does not list {LABEL}. "
+              f"The plist is at {PLIST_PATH}; nothing is scheduled.\n"
+              f"  Try:  launchctl bootstrap gui/$(id -u) {PLIST_PATH}",
+              file=sys.stderr)
         return 1
 
     days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]

@@ -58,7 +58,15 @@ testpaths = ["tests"]
 pythonpath = ["."]
 
 [tool.coverage.run]
-source = ["."]
+# "scripts" is listed even though it is already inside "." on purpose. Coverage
+# finds never-imported files by walking each source directory, and it only
+# descends into subdirectories that are importable packages -- scripts/ has no
+# __init__.py, so a script that no test imports was not measured at all, rather
+# than measured at 0%. That is the one blind spot a coverage floor must not have,
+# and it had it: the file that installs the weekly run had no tests, and adding
+# them or deleting it would have moved the number by exactly nothing. Naming the
+# directory makes it a source root of its own, which the walk does enter.
+source = [".", "scripts"]
 omit = [
     "tests/*",
     "overleaf/*",   # a submodule: someone else's LaTeX project
