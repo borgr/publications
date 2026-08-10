@@ -240,6 +240,14 @@ written into the working tree, never put on a command line, and never printed;
 storing it in the submodule's remote URL or in `.git/config` would leave it in
 plaintext, and a dotfile in the tree is one `git add -A` away from a public repo.
 
+The store is then **read back** with `git credential fill`, because `approve`
+cannot be trusted to have worked: git exits 0 whether the helper stored anything
+or not, so a `credential.helper` naming a program that is not installed
+(`libsecret` where `git-credential-libsecret` was never built) reports success
+having stored nothing. The read-back also catches a *different* token answering
+first — git uses the first helper that answers, so an old token ahead of the new
+one is the one `git push` sends.
+
 Until you do this, `update.py` prints the reason it will not be able to push
 *before* step 1 rather than after a full Scholar fetch, and then **runs anyway**.
 Only the push is lost: `papers.csv`, `citations.csv` and the rebuilt CV all end up

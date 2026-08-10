@@ -117,6 +117,29 @@ class TestCheckCredential:
         assert problem is not None
         assert "install_overleaf_credential.py" in problem
 
+    def test_a_reachable_remote_is_no_problem(self, tmp_path):
+        """The success path, against a local remote so it needs no network.
+
+        Every other test here drives a failure, so a check that returned a problem
+        unconditionally passed all of them -- while step 7 refused to run on every
+        Monday with an authentication error the author had no way to clear.
+        """
+        origin = tmp_path / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+        repo = tmp_path / "overleaf"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        # `ls-remote --exit-code origin HEAD` needs a HEAD on the far side, so the
+        # remote needs one commit; an empty remote is a different answer.
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@e",
+                        "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                        "-m", "seed"], check=True)
+        subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
+                        str(origin)], check=True)
+        subprocess.run(["git", "-C", str(repo), "push", "-q", "origin",
+                        "HEAD:refs/heads/master"], check=True)
+
+        assert overleaf_auth.check_credential(str(repo)) is None
+
     def test_the_reported_error_carries_no_credential(self, tmp_path):
         """Whatever git says goes into a log and a desktop notification."""
         repo = tmp_path / "overleaf"
@@ -223,6 +246,59 @@ class TestStoreCredential:
             input="protocol=https\nhost=git.overleaf.com\nusername=git\n\n",
             capture_output=True, text=True, env=overleaf_auth.noninteractive_env())
         assert "password=olp_stored" in got.stdout
+
+    def test_a_helper_that_stores_nothing_is_not_reported_as_success(
+            self, tmp_path, monkeypatch):
+        """`git credential approve` exits 0 when the helper cannot even run.
+
+        A `credential.helper` naming a program that is not installed -- libsecret
+        on a Linux box where git-credential-libsecret was never built -- prints
+        "No such file or directory" to stderr and succeeds. Trusting the exit code
+        told the author the token was stored; the next unattended run then failed
+        to authenticate, with the installer still claiming it was fine.
+        """
+        repo = tmp_path / "overleaf"
+        repo.mkdir()
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "credential.helper",
+                        str(tmp_path / "not-installed")], check=True)
+        with pytest.raises(ValueError) as excinfo:
+            overleaf_auth.store_credential(
+                "https://git:olp_tok@git.overleaf.com/p", str(repo))
+        assert "stores nothing" in str(excinfo.value)
+        assert "olp_tok" not in str(excinfo.value)
+
+    def test_a_helper_answering_first_with_another_token_is_refused(
+            self, tmp_path, monkeypatch):
+        """Storing it is not enough: git uses the *first* helper that answers.
+
+        So a read-only helper ahead of the writable one keeps its own token in
+        force, and `git push` sends that one -- an old Overleaf token, after a
+        rotation, authenticating as nobody every Monday while the store holds the
+        right value.
+        """
+        repo = tmp_path / "overleaf"
+        repo.mkdir()
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", os.devnull)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        # Answers `get` and ignores `store`, which is how a keychain holding a
+        # revoked token behaves towards a token stored somewhere else.
+        subprocess.run(["git", "-C", str(repo), "config", "credential.helper",
+                        '!f() { test "$1" = get && printf "password=olp_stale\\n"; }; f'],
+                       check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "--add",
+                        "credential.helper", f"store --file={tmp_path / 'creds'}"],
+                       check=True)
+        with pytest.raises(ValueError) as excinfo:
+            overleaf_auth.store_credential(
+                "https://git:olp_new@git.overleaf.com/p", str(repo))
+        problem = str(excinfo.value)
+        assert "answers for git.overleaf.com" in problem
+        assert "credential reject" in problem, "refusing without the fix is a dead end"
+        assert "olp_new" not in problem and "olp_stale" not in problem
 
     def test_a_tokenless_url_is_refused_before_anything_is_stored(self, tmp_path):
         repo = tmp_path / "overleaf"

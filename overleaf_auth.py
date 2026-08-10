@@ -127,14 +127,48 @@ def split_url(url):
             parts.password, parts.path)
 
 
+def stored_password(protocol, host, username, repo_dir=None):
+    """The password git would send for this host, or "" if nothing answers.
+
+    `credential fill` rather than a look inside the store, because git asks every
+    configured helper in turn and uses the first answer -- so this is the only
+    thing that reports what a push will actually send, as opposed to what some
+    helper holds.
+
+    Never printed and never returned to a caller that logs: the value is compared,
+    and only the verdict is reported.
+    """
+    result = subprocess.run(
+        ["git"] + (["-C", repo_dir] if repo_dir else []) + ["credential", "fill"],
+        input=f"protocol={protocol}\nhost={host}\nusername={username}\n\n",
+        capture_output=True, text=True, env=noninteractive_env())
+    for line in result.stdout.splitlines():
+        if line.startswith("password="):
+            return line[len("password="):]
+    return ""
+
+
 def store_credential(url, repo_dir=None):
-    """Hand the token to git's configured credential helper.
+    """Hand the token to git's configured credential helper, and check it took.
 
     `git credential approve` reads the fields on stdin, so the token is written to
     a pipe rather than a command line or a file. Which store it ends up in is
     whatever `credential.helper` says -- osxkeychain on macOS, libsecret or a
     plaintext store elsewhere -- and that is deliberately git's decision, not
     ours: it is where git will look for it again.
+
+    Then it is read back, because `approve` cannot be trusted to have worked. Git
+    exits 0 whether the helper stored anything or not: a `credential.helper` naming
+    a program that is not installed -- `libsecret` on a Linux box where
+    `git-credential-libsecret` was never built is the usual one -- prints
+    "No such file or directory" on stderr and succeeds. The installer would then
+    report the token stored, and the Monday run would fail to authenticate with
+    nothing to point at.
+
+    The read-back also catches the opposite: another helper answering first with an
+    older token. That is not a false alarm -- the first answer is the one `git push`
+    sends, so a stale credential ahead of this one means the push uses the stale
+    credential.
     """
     protocol, host, username, password, _path = split_url(url)
     helper = subprocess.run(
@@ -152,6 +186,21 @@ def store_credential(url, repo_dir=None):
         input=payload, capture_output=True, text=True)
     if result.returncode != 0:
         raise ValueError(f"git credential approve failed: {result.stderr.strip()[:200]}")
+
+    readback = stored_password(protocol, host, username, repo_dir)
+    if not readback:
+        raise ValueError(
+            f"git reported success but stores nothing: asked for the token back, "
+            f"and no helper answered. `credential.helper` is `{helper}` — check "
+            f"that helper is installed (git prints its failure to store on stderr "
+            f"and still exits 0).")
+    if readback != password:
+        raise ValueError(
+            f"another credential helper answers for {host} before `{helper}` "
+            f"does, with a different token — and the first answer is the one "
+            f"`git push` sends, so it would authenticate with that one. Remove it:"
+            f"\n      printf 'protocol={protocol}\\nhost={host}\\n"
+            f"username={username}\\n\\n' | git credential reject")
     return helper
 
 
