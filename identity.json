@@ -607,6 +607,7 @@
     "DBLP:journals/corr/abs-2407-13696": {
       "arxiv": "2407.13696",
       "doi": "10.48550/arXiv.2407.13696",
+      "s2": "271270060",
       "scholar_id": "8b8IhUYAAAAJ:ldfaerwXgEUC",
       "titles": [
         "benchmarkagreementtestingdonerightaguideforllmbenchmarkevaluation"
@@ -686,6 +687,7 @@
       ]
     },
     "batzner2026every": {
+      "arxiv": "2606.14516",
       "scholar_id": "8b8IhUYAAAAJ:4MWp96NkSFoC",
       "titles": [
         "everyevaleveraunifyingschemaandcommunityrepositoryforaievaluationresults"
@@ -698,6 +700,7 @@
       ]
     },
     "cai2026latent": {
+      "arxiv": "2512.06553",
       "scholar_id": "8b8IhUYAAAAJ:4fKUyHm3Qg0C",
       "titles": [
         "alatentvariableframeworkforscalinglawsinlargelanguagemodels"
@@ -707,7 +710,8 @@
       "arxiv": "2510.24081",
       "scholar_id": "8b8IhUYAAAAJ:K3LRdlH-MEoC",
       "titles": [
-        "globalpiqaevaluatingphysicalcommonsensereasoningacross100languagesandcultures"
+        "globalpiqaevaluatingphysicalcommonsensereasoningacross100languagesandcultures",
+        "globalpiqaevaluatingcommonsensereasoningacross100languagesandcultures"
       ]
     },
     "charpentier-etal-2025-findings": {
@@ -736,6 +740,7 @@
       ]
     },
     "choshen2026babylm": {
+      "arxiv": "2602.20092",
       "scholar_id": "8b8IhUYAAAAJ:bnK-pcrLprsC",
       "titles": [
         "babylmturns4andgoesmultilingualcallforpapersforthe2026babylmworkshop"
@@ -748,6 +753,7 @@
       ]
     },
     "diskind2026cross": {
+      "arxiv": "2606.24579",
       "scholar_id": "8b8IhUYAAAAJ:BwyfMAYsbu0C",
       "titles": [
         "crosslingualexplorationforparametricknowledge"
@@ -817,6 +823,12 @@
       "scholar_id": "8b8IhUYAAAAJ:P5F9QuxV20EC",
       "titles": [
         "textarena"
+      ]
+    },
+    "gupta2026automated": {
+      "scholar_id": "8b8IhUYAAAAJ:TIZ-Mc8IlK0C",
+      "titles": [
+        "automateddiscoveryhasnouniversallysuperiorharness"
       ]
     },
     "habba-etal-2025-dove": {
@@ -1008,12 +1020,16 @@
     },
     "waldis2026instructions": {
       "arxiv": "2605.11206",
+      "dblp": "journals/corr/abs-2605-11206",
+      "doi": "10.48550/arXiv.2605.11206",
+      "s2": "288257161",
       "scholar_id": "8b8IhUYAAAAJ:eMMeJKvmdy0C",
       "titles": [
         "instructionsshapeproductionoflanguagenotprocessing"
       ]
     },
     "wang2026mindgames": {
+      "arxiv": "2605.29512",
       "scholar_id": "8b8IhUYAAAAJ:Z5m8FVwuT1cC",
       "titles": [
         "mindgamesalivearenaforevaluatingsocialandstrategicreasoninginmultiagentllms"
