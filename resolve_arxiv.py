@@ -336,11 +336,6 @@ def host_available(host: str) -> bool:
     return True
 
 
-def s2_available() -> bool:
-    """False while Semantic Scholar is in a rate-limit cooldown."""
-    return host_available(_S2_HOST)
-
-
 def _host_ready(host: str) -> bool:
     """Whether this host can be asked now, waiting out a short cooldown if it is on.
 

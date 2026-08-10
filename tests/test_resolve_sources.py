@@ -150,8 +150,8 @@ def test_the_key_file_lives_outside_the_repository():
     assert os.path.isabs(ra.KEY_FILE), "a relative path resolves against the cwd"
 
 
-def test_s2_is_available_when_not_in_cooldown():
-    assert ra.s2_available() is True
+def test_a_host_is_available_when_not_in_cooldown():
+    assert ra.host_available(ra._S2_HOST) is True
 
 
 def _pause(host, until):
@@ -168,10 +168,10 @@ def _spent_budget(host):
     ra._state_for(host)["wait_budget"] = 0
 
 
-def test_s2_is_unavailable_during_the_cooldown(monkeypatch):
+def test_a_host_is_unavailable_during_the_cooldown(monkeypatch):
     monkeypatch.setattr(ra.time, "time", lambda: 100.0)
     _pause(ra._S2_HOST, 160.0)
-    assert ra.s2_available() is False
+    assert ra.host_available(ra._S2_HOST) is False
 
 
 def test_the_cooldown_expires_and_says_so(monkeypatch, capsys):
@@ -180,7 +180,7 @@ def test_the_cooldown_expires_and_says_so(monkeypatch, capsys):
     it lost all three sources."""
     monkeypatch.setattr(ra.time, "time", lambda: 200.0)
     _pause(ra._S2_HOST, 160.0)
-    assert ra.s2_available() is True
+    assert ra.host_available(ra._S2_HOST) is True
     assert "cooldown over" in capsys.readouterr().out
     assert ra._state_for(ra._S2_HOST)["blocked_until"] == 0.0
 
