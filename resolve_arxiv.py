@@ -132,7 +132,7 @@ def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
     four sources reached through here are not the unmetered half of the ladder.
     """
     host = _host_of(url)
-    if not host_available(host):
+    if not _host_ready(host):
         _note_unanswered(f"{host} (in cooldown)")
         return None
     refused = False
@@ -162,7 +162,7 @@ def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
         # Every later paper would otherwise spend three more requests and six more
         # seconds being told the same no. Over a full run that is most of the
         # requests going to a source that has already stopped answering.
-        _state_for(host)["blocked_until"] = time.time() + _DEFAULT_COOLDOWN_SECONDS
+        _pause_host(host, _DEFAULT_COOLDOWN_SECONDS, _DEFAULT_SPACING_SECONDS)
         print(f"\n    {host} kept refusing — pausing it for "
               f"{_DEFAULT_COOLDOWN_SECONDS}s", end="", flush=True)
     _note_unanswered(host)
@@ -212,6 +212,34 @@ _S2_COOLDOWN_SECONDS_ANON = 120
 _DEFAULT_SPACING_SECONDS = 1.0
 _DEFAULT_COOLDOWN_SECONDS = 60
 
+# How long one run will wait for a single host's cooldown to end, in total, rather
+# than skip the papers that needed it.
+#
+# A cooldown stops a refused source from being asked again, which is right, and it
+# is measured in wall-clock time -- but the loop it is protecting the source from
+# finishes in seconds. On the run that motivated this, Semantic Scholar's search
+# endpoint refused twice and went into a 60s pause with nine papers left to
+# resolve; all nine were skipped inside two seconds, all nine were reported unknown,
+# and the next run does the same thing, so those papers never resolve at all.
+#
+# Waiting out the pause is also the more polite of the two: it sends no requests
+# while the source has asked not to be asked, and then sends the same requests it
+# would have sent anyway, instead of dropping them and asking again next week. The
+# budget is what keeps a source that refuses everything from costing the run an
+# afternoon.
+_COOLDOWN_WAIT_BUDGET_SECONDS = 150
+
+# The ceiling on how far a host that keeps refusing can push its own spacing.
+#
+# A refusal is the source saying that the rate it was just asked at is too fast for
+# it, now, for reasons on its side that no constant here can know: the run that
+# motivated this got two 429s from S2's search endpoint at 1.2s spacing while
+# holding a key that documents 1 RPS. Waiting out the pause and then resuming at
+# the pace that was refused spends the wait budget on being refused again, so each
+# refusal doubles the host's spacing for the rest of the run. That way the run's own
+# experience sets the pace, rather than a number written here months ago.
+_MAX_SPACING_SECONDS = 10.0
+
 # Keyed by host, because both doors out of here -- _curl_get and _http_get_json --
 # serve several sources each. One shared cooldown meant an S2 429 silenced every
 # OpenReview lookup for two minutes, and an OpenReview 429 put S2 in cooldown:
@@ -224,7 +252,10 @@ def _state_for(host: str) -> dict:
     # last_request is None rather than 0.0 for "never asked". Zero would work only
     # because the epoch is decades in the past, which is an accident of the clock's
     # origin and not a thing to rely on.
-    return _host_state.setdefault(host, {"blocked_until": 0.0, "last_request": None})
+    return _host_state.setdefault(
+        host, {"blocked_until": 0.0, "last_request": None,
+               "wait_budget": _COOLDOWN_WAIT_BUDGET_SECONDS,
+               "spacing_floor": 0.0})
 
 
 def _s2_limits() -> tuple[float, float]:
@@ -310,6 +341,46 @@ def s2_available() -> bool:
     return host_available(_S2_HOST)
 
 
+def _host_ready(host: str) -> bool:
+    """Whether this host can be asked now, waiting out a short cooldown if it is on.
+
+    The pause is honored either way — nothing is sent while it lasts. What differs
+    is what the run does with the time. It can spend it waiting and then ask, or
+    spend it skipping every paper it had left and ask again next week; only the
+    first ever finishes. The loop is seconds long and the pause is a minute, so a
+    refusal a third of the way through silently costs the run everything after it,
+    and costs the next run the same papers in the same way.
+
+    The budget is per host and per run: it bounds what one source that refuses
+    everything can cost, and once it is spent that host is skipped exactly as it
+    was before.
+    """
+    if host_available(host):
+        return True
+    state = _state_for(host)
+    remaining = state["blocked_until"] - time.time()
+    if remaining > state["wait_budget"]:
+        return False
+    state["wait_budget"] -= remaining
+    print(f"\n    waiting out {host}'s {remaining:.0f}s pause rather than "
+          f"skipping the papers behind it", end="", flush=True)
+    time.sleep(remaining)
+    state["blocked_until"] = 0.0
+    return True
+
+
+def _pause_host(host: str, cooldown: float, spacing: float) -> None:
+    """Record that a host refused: hold off asking it, and then ask it more slowly.
+
+    Both doors out of here pause a refusing host, and both do it for the same two
+    reasons, so both do it through here.
+    """
+    state = _state_for(host)
+    state["blocked_until"] = time.time() + cooldown
+    state["spacing_floor"] = min(_MAX_SPACING_SECONDS,
+                                 max(spacing, state["spacing_floor"]) * 2)
+
+
 def _wait_turn(host: str, spacing: float) -> None:
     """Hold off until `spacing` has passed since the last request to this host.
 
@@ -317,8 +388,12 @@ def _wait_turn(host: str, spacing: float) -> None:
     being refused, and sleeping thirty. It also keeps the failure from being
     charged to the source -- a 429 is recorded as "no answer", so a paper S2 does
     index reads as one it does not, and the ladder falls through to the preprint.
+
+    The interval is the wider of what the caller asked for and what this host has
+    earned by refusing.
     """
     state = _state_for(host)
+    spacing = max(spacing, state["spacing_floor"])
     if state["last_request"] is not None:
         gap = state["last_request"] + spacing - time.time()
         if gap > 0:
@@ -335,11 +410,14 @@ def _http_get_json(url: str, retries: int = 2, data: bytes | None = None) -> dic
     means three sources are silent rather than one.
     """
     host = _host_of(url)
-    if not host_available(host):
+    if not _host_ready(host):
         _note_unanswered(f"{host} (in cooldown)")
         return None
     headers = {"User-Agent": "resolve-arxiv-bib/1.0"}
-    spacing, cooldown = _S2_SPACING_SECONDS, _S2_COOLDOWN_SECONDS
+    # OpenReview is the other source reached through here, and it gets what every
+    # unmetered host gets. It used to get S2's keyed numbers, which was only ever
+    # an accident of S2 having been the first source through this door.
+    spacing, cooldown = _DEFAULT_SPACING_SECONDS, _DEFAULT_COOLDOWN_SECONDS
     if host == _S2_HOST:
         key = s2_api_key()
         if key:
@@ -361,7 +439,7 @@ def _http_get_json(url: str, retries: int = 2, data: bytes | None = None) -> dic
                           end="", flush=True)
                     time.sleep(cooldown // 2)
                     continue
-                _state_for(host)["blocked_until"] = time.time() + cooldown
+                _pause_host(host, cooldown, spacing)
                 print(f"\n    {host} still rate-limited — pausing it for "
                       f"{cooldown}s", end="", flush=True)
                 _note_unanswered(host)

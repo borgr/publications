@@ -158,6 +158,16 @@ def _pause(host, until):
     ra._state_for(host)["blocked_until"] = until
 
 
+def _spent_budget(host):
+    """Leave this host no time left to wait out a pause with.
+
+    A run waits out a short pause rather than skipping the papers behind it, up to
+    a budget per host. Tests about what skipping does have to spend that budget
+    first, or the pause they set up is simply waited out.
+    """
+    ra._state_for(host)["wait_budget"] = 0
+
+
 def test_s2_is_unavailable_during_the_cooldown(monkeypatch):
     monkeypatch.setattr(ra.time, "time", lambda: 100.0)
     _pause(ra._S2_HOST, 160.0)
@@ -232,6 +242,7 @@ def test_the_api_key_is_sent_only_to_semantic_scholar(monkeypatch):
 def test_no_request_is_made_while_s2_is_paused(monkeypatch):
     monkeypatch.setattr(ra.time, "time", lambda: 0.0)
     _pause(ra._S2_HOST, 99.0)
+    _spent_budget(ra._S2_HOST)
     monkeypatch.setattr(ra, "urlopen",
                         lambda *a, **k: pytest.fail("called S2 during its cooldown"))
     assert ra._http_get_json(_S2_URL) is None
@@ -396,6 +407,43 @@ def test_pacing_is_per_host(monkeypatch):
     assert slept == []
 
 
+def test_a_refusal_makes_the_rest_of_the_run_slower(monkeypatch):
+    """A 429 is the source saying the current pace is too fast for it right now.
+    Waiting the pause out and then resuming at exactly that pace spends the waiting
+    budget on being refused again -- measured, with a key and 1.2s spacing, as two
+    429s inside five requests."""
+    slept = _timeline(monkeypatch)
+    monkeypatch.setattr(ra, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("429")))
+    ra._http_get_json(_S2_URL)
+    monkeypatch.setattr(ra, "urlopen", lambda req, timeout=0: _Resp({}))
+    slept.clear()
+    ra._http_get_json(_S2_URL)
+    ra._http_get_json(_S2_URL)
+    assert slept[-1] == 2 * ra._S2_SPACING_SECONDS_ANON
+
+
+def test_the_slowdown_has_a_ceiling(monkeypatch):
+    """Unbounded doubling turns a source that refuses everything into a run that
+    never ends: twelve refusals at 3s would be three and a half hours of spacing."""
+    slept = _timeline(monkeypatch)
+    for _ in range(12):
+        ra._pause_host(ra._S2_HOST, 0.0, ra._S2_SPACING_SECONDS_ANON)
+    ra._http_get_json(_S2_URL)
+    ra._http_get_json(_S2_URL)
+    assert slept == [ra._MAX_SPACING_SECONDS]
+
+
+def test_the_slowdown_is_per_host(monkeypatch):
+    """For the same reason the cooldown and the waiting budget are: S2 refusing is
+    not evidence about how fast OpenReview wants to be asked."""
+    slept = _timeline(monkeypatch)
+    ra._http_get_json(_OR_URL)
+    ra._pause_host(ra._S2_HOST, 0.0, ra._S2_SPACING_SECONDS_ANON)
+    ra._http_get_json(_OR_URL)
+    assert slept == [ra._DEFAULT_SPACING_SECONDS]
+
+
 def test_the_rate_limit_state_can_be_reset(monkeypatch):
     """A long-lived process should not inherit an hour-old cooldown."""
     _pause(ra._S2_HOST, 1e12)
@@ -414,6 +462,76 @@ def test_a_transient_error_is_retried(monkeypatch):
         return _Resp({"ok": 1})
     monkeypatch.setattr(ra, "urlopen", _open)
     assert ra._http_get_json("https://x/") == {"ok": 1}
+
+
+# ── a pause outlives the loop it is protecting ───────────────────────────────
+#
+# Measured on a real weekly run: S2's search endpoint refused twice, went into a
+# 60s pause, and the nine papers still to resolve were skipped in under two
+# seconds. All nine were reported unknown, nothing was learned, and the next run
+# reproduces it exactly -- so those papers never resolve at all. The pause is
+# right; spending it on skipping rather than on waiting is not.
+
+def test_a_short_pause_is_waited_out_rather_than_skipped(monkeypatch):
+    slept = _timeline(monkeypatch)
+    _pause(ra._S2_HOST, 30.0)
+    assert ra._http_get_json(_S2_URL) == {}
+    assert slept == [30.0], "did not wait out the pause"
+
+
+def test_a_pause_longer_than_the_budget_is_skipped(monkeypatch):
+    """The budget is the whole difference between waiting and hanging: a source
+    that has stopped answering for the afternoon must not take the run with it."""
+    slept = _timeline(monkeypatch)
+    monkeypatch.setattr(ra, "urlopen",
+                        lambda *a, **k: pytest.fail("asked a host that is paused"))
+    _pause(ra._S2_HOST, ra._COOLDOWN_WAIT_BUDGET_SECONDS + 1)
+    assert ra._http_get_json(_S2_URL) is None
+    assert slept == []
+
+
+def test_the_waiting_is_bounded_across_repeated_pauses(monkeypatch):
+    """Bounded per run, not per pause. A budget that reset each time a host was
+    paused again would be no bound at all -- one source refusing every request
+    would keep buying itself another minute."""
+    slept = _timeline(monkeypatch)
+    for _ in range(10):
+        _pause(ra._S2_HOST, ra.time.time() + 60.0)
+        ra._http_get_json(_S2_URL)
+    assert sum(slept) <= ra._COOLDOWN_WAIT_BUDGET_SECONDS
+
+
+def test_the_budget_is_per_host(monkeypatch):
+    """Same reason the cooldown is: DBLP rate-limiting says nothing about whether
+    Semantic Scholar is answering, and a shared budget would let one exhausted
+    source stop the others from being waited for."""
+    slept = _timeline(monkeypatch)
+    _spent_budget(ra._S2_HOST)
+    _pause(ra._S2_HOST, 30.0)
+    _pause("api2.openreview.net", 30.0)
+    assert ra._http_get_json(_S2_URL) is None
+    assert ra._http_get_json(_OR_URL) == {}
+    assert slept == [30.0]
+
+
+def test_curl_waits_out_a_short_pause_too(monkeypatch):
+    """Both doors, or the four sources reached through curl keep losing every
+    paper after the first refusal."""
+    calls = _curl_returning(monkeypatch, _Result(0, "@article{a,}"))
+    slept = _timeline(monkeypatch)
+    _pause("dblp.org", 40.0)
+    assert ra._curl_get("https://dblp.org/x") == "@article{a,}"
+    assert slept == [40.0]
+    assert len(calls) == 1
+
+
+def test_waiting_out_a_pause_says_so(monkeypatch, capsys):
+    """The run's log is the only account of why a weekly job took two minutes
+    longer than usual."""
+    _timeline(monkeypatch)
+    _pause(ra._S2_HOST, 30.0)
+    ra._http_get_json(_S2_URL)
+    assert "waiting out" in capsys.readouterr().out
 
 
 # ── attempt counts ───────────────────────────────────────────────────────────
@@ -530,6 +648,7 @@ def test_a_source_that_keeps_refusing_is_paused(monkeypatch):
     assert len(calls) == ra._CURL_TRIES
 
     before = len(calls)
+    _spent_budget("dblp.org")
     assert ra._curl_get("https://dblp.org/y", **reject_html) is None
     assert len(calls) == before, "the paused host was asked again"
 
@@ -553,6 +672,7 @@ def test_a_paused_source_is_an_unanswered_lookup_not_an_empty_result(monkeypatch
     reject_html = {"accept": lambda b: not b.startswith("<")}
     ra._curl_get("https://dblp.org/x", **reject_html)
     before = ra.unanswered_lookups()
+    _spent_budget("dblp.org")
     assert ra._curl_get("https://dblp.org/y", **reject_html) is None
     assert ra.unanswered_lookups() == before + 1
 

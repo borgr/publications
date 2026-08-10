@@ -166,6 +166,24 @@ error page and HTTP 200 — is paused for the rest of the minute rather than ask
 again, with backoff, for every remaining paper. A request that never completed is
 treated as the network rather than the source, and pauses nothing.
 
+A pause is then **waited out rather than skipped**, up to 150s per host per run.
+The pause is measured in wall-clock time and the loop it protects finishes in
+seconds, so the two do not overlap the way they look like they should: on a real
+run Semantic Scholar's search endpoint went into a 60s pause with nine papers
+left, all nine were skipped inside two seconds, all nine were reported unknown —
+and the next run does exactly the same thing, so those papers never resolve at
+all. Waiting is also the more polite of the two options: nothing is sent while the
+source has asked not to be asked, and then the same requests go out that would
+have gone out anyway. The budget is what stops a source that refuses everything
+from costing the run an afternoon; once it is spent, that host is skipped again.
+
+Each refusal also **doubles that host's spacing** for the rest of the run, capped
+at 10s, because resuming at the pace that was just refused spends the waiting
+budget on being refused again. A 429 is the source saying the current rate is too
+fast for it now, for reasons no constant in this repository can know — the run that
+prompted this was refused twice at 1.2s spacing while holding a key documented at
+1 RPS.
+
 ## Scheduling
 
 Split deliberately, because Scholar blocks datacenter IP ranges — a hosted runner
