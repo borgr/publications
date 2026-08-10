@@ -312,6 +312,55 @@ def test_a_credential_problem_warns_but_still_runs_every_step(h, monkeypatch):
     assert h.ran("step1_fetch") and h.ran("step4_build_bib")
 
 
+# ── the Semantic Scholar key, reported rather than assumed ───────────────────
+#
+# An absent key does not fail, it throttles, and a throttled S2 takes the ACL
+# Anthology and OpenReview with it -- both are reached through its externalIds. So
+# a run with no key looks like a run with nothing left to resolve, which is a thing
+# this pipeline is supposed to be able to say the difference between.
+
+def test_the_run_says_which_key_it_is_using(h, monkeypatch, capsys):
+    import resolve_arxiv
+    monkeypatch.setattr(resolve_arxiv, "s2_api_key_source",
+                        lambda: ("k", "the S2_API_KEY environment variable"))
+    update.main(["--no-notify"])
+    assert "the S2_API_KEY environment variable" in capsys.readouterr().out
+
+
+def test_a_missing_key_is_reported_with_where_to_put_one(h, monkeypatch, capsys):
+    import resolve_arxiv
+    monkeypatch.setattr(resolve_arxiv, "s2_api_key_source", lambda: ("", ""))
+    update.main(["--no-notify"])
+    out = capsys.readouterr().out
+    assert "no API key" in out and resolve_arxiv.KEY_FILE in out
+
+
+def test_a_missing_key_does_not_stop_the_run(h, monkeypatch):
+    """It is a notice, not a preflight problem: the pipeline works without one."""
+    import resolve_arxiv
+    monkeypatch.setattr(resolve_arxiv, "s2_api_key_source", lambda: ("", ""))
+    update.main(["--no-notify"])
+    assert h.ran("step3_resolve") and h.ran("step4_build_bib")
+
+
+def test_the_key_is_never_printed(h, monkeypatch, capsys):
+    """The source is the useful half. Printing the key would put a credential in
+    ~/Library/Logs on every weekly run, and in the CI log if CI ever runs this."""
+    import resolve_arxiv
+    monkeypatch.setattr(resolve_arxiv, "s2_api_key_source",
+                        lambda: ("s3cr3t-key-value", "config.py"))
+    update.main(["--no-notify"])
+    assert "s3cr3t-key-value" not in capsys.readouterr().out
+
+
+def test_no_key_notice_when_the_resolve_step_is_skipped(h, monkeypatch, capsys):
+    """Nothing asks S2 anything, so the key is irrelevant and saying so is noise."""
+    import resolve_arxiv
+    monkeypatch.setattr(resolve_arxiv, "s2_api_key_source", lambda: ("", ""))
+    update.main(["--skip-resolve", "--no-notify"])
+    assert "API key" not in capsys.readouterr().out
+
+
 def test_a_step_that_raises_leaves_the_step_unrecorded(h, monkeypatch):
     """So the next run retries it instead of auto-skipping a step that failed."""
     def boom(*a, **k):

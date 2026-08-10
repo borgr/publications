@@ -114,6 +114,79 @@ def test_no_bare_tokens_are_committed():
     assert not leaks, _REVOKE + "\n  ".join(leaks)
 
 
+# A key with no recognisable shape, in the slot that invites it.
+#
+# The two scans above work by recognising a token: `olp_`, `ghp_` and the rest
+# announce themselves. A Semantic Scholar key is forty-odd alphanumerics with no
+# prefix, indistinguishable from a hash, a test fixture or a commit id, so no
+# pattern can find one without firing on prose constantly.
+#
+# What can be checked is the slot. config.py ships `S2_API_KEY = ""` with a comment
+# inviting a key, and config.py is tracked in a public repository -- so the
+# documented place to put one is also the one place it must never go. That is the
+# whole trap, and it is narrow enough to guard exactly: a tracked file may name a
+# credential variable, and must not assign a value to it.
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*'
+    r'(?:API_KEY|_TOKEN|_SECRET|_PASSWORD|api_key|_token|_secret|_password))'
+    r'\s*[:=]\s*["\']?([^"\'\s#]+)',
+)
+
+# The variable named as a default argument, a type annotation or a comparison is
+# not a place a key gets pasted, and neither is one assigned from somewhere else.
+_NOT_A_LITERAL_RE = re.compile(r'^(?:os\b|config\b|getattr|None|True|False|\d+$)')
+
+
+def _assigned_secrets(path, line):
+    """Any credential-named variable given a value on this line, minus the ones
+    that are plainly not a pasted key."""
+    m = _SECRET_ASSIGNMENT_RE.match(line)
+    if not m:
+        return []
+    value = m.group(2)
+    if _NOT_A_LITERAL_RE.match(value) or _is_fixture(value):
+        return []
+    return [f"{path}: {m.group(1)} = <redacted>"]
+
+
+def test_no_tracked_file_assigns_a_credential_a_value():
+    """Catches the key shapes the scans above cannot recognise.
+
+    config.py's own `S2_API_KEY = ""` passes, because an empty slot is the shipped
+    state. Filling it in is what fails -- which is the entire point, since filling
+    it in is what the file's comment used to tell you to do.
+    """
+    leaks = []
+    for path, lineno, line in _tracked_lines():
+        leaks.extend(f"{path}:{lineno}" + leak[len(path):]
+                     for leak in _assigned_secrets(path, line))
+    assert not leaks, _REVOKE + "\n  ".join(leaks)
+
+
+@pytest.mark.parametrize("line", [
+    'S2_API_KEY = "aBcD1234eFgH5678iJkL9012mNoP3456qRsT"',
+    "S2_API_KEY='aBcD1234eFgH5678iJkL9012mNoP3456qRsT'",
+    'export GITHUB_TOKEN=aBcD1234eFgH5678iJkL9012mNoP3456',
+    'my_api_key = "aBcD1234eFgH5678iJkL9012mNoP3456qRsT"',
+])
+def test_the_assignment_scan_would_actually_catch_one(line):
+    assert _assigned_secrets("f.py", line), f"missed a pasted key: {line}"
+
+
+@pytest.mark.parametrize("line", [
+    'S2_API_KEY = ""',                       # the shipped slot
+    "S2_API_KEY = ''",
+    'S2_API_KEY = "YOUR_KEY_HERE"',          # documentation
+    'S2_API_KEY = os.environ["S2_API_KEY"]',  # read, not pasted
+    '    key = getattr(config, "S2_API_KEY", "") or ""',
+    'S2_API_KEY: str = ""',
+    '# set S2_API_KEY = your key from the settings page',
+    'if not config.S2_API_KEY:',
+])
+def test_the_assignment_scan_does_not_fire_on_ordinary_code(line):
+    assert not _assigned_secrets("f.py", line), f"false positive on: {line}"
+
+
 def _url(secret):
     # Concatenated, never a literal: this file is scanned too, and a fixture
     # spelled out in full would make the scanner report itself.

@@ -140,6 +140,27 @@ def check_push_credential(enabled: bool = True) -> str | None:
     return overleaf_auth.check_credential(OVERLEAF_DIR)
 
 
+def describe_s2_key() -> str:
+    """One line saying whether step 3 has a Semantic Scholar key, and from where.
+
+    Not blocking, and not a problem: the pipeline works without one. It is printed
+    because the difference is otherwise invisible -- an absent key does not fail,
+    it throttles, and a throttled S2 costs the ACL Anthology and OpenReview too,
+    since both are reached through its externalIds. A run that resolved nothing for
+    a whole quarter would look exactly like a run with nothing left to resolve.
+
+    Saying where the key came from is the point of it. Filling in a key that some
+    other source shadows is silent, and so is exporting one in a shell the weekly
+    run never sees.
+    """
+    import resolve_arxiv
+    _key, source = resolve_arxiv.s2_api_key_source()
+    if source:
+        return f"Semantic Scholar: using the key from {source}."
+    return ("Semantic Scholar: no API key, so step 3 will be throttled and may "
+            f"resolve less. Put one in {resolve_arxiv.KEY_FILE} -- see the README.")
+
+
 def preflight() -> list:
     """Check the things whose absence would otherwise fail deep into a run.
 
@@ -703,6 +724,9 @@ Companion commands, none needed routinely:
     if push_problem:
         print(f"Warning: {push_problem}\n")
         sys.stdout.flush()
+
+    if not args.skip_resolve:
+        print(f"{describe_s2_key()}\n")
 
     n_added = 0
     n_upgraded = n_appended = n_still_arxiv = 0

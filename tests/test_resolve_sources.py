@@ -64,17 +64,100 @@ def curl(monkeypatch, responses):
 
 # ── the S2 key and its cooldown ──────────────────────────────────────────────
 
-def test_the_api_key_comes_from_the_environment_when_config_has_none(monkeypatch):
+@pytest.fixture
+def no_key(tmp_path, monkeypatch):
+    """Every source of the key, pointed somewhere disposable.
+
+    KEY_FILE included, and not only for isolation: left alone these tests read the
+    real key on the author's machine, and a failing assertion prints what it
+    compared. A test suite is not a place a credential should be able to surface.
+    """
+    monkeypatch.delenv("S2_API_KEY", raising=False)
+    monkeypatch.setattr(ra, "KEY_FILE", str(tmp_path / "s2_api_key"))
+    monkeypatch.setattr(ra, "FILE_SOURCE", str(tmp_path / "s2_api_key"))
+    import config
+    monkeypatch.setattr(config, "S2_API_KEY", "", raising=False)
+    return tmp_path
+
+
+def test_the_api_key_comes_from_the_environment(no_key, monkeypatch):
     monkeypatch.setenv("S2_API_KEY", "  env-key  ")
-    monkeypatch.setattr(ra, "s2_api_key", ra.s2_api_key)
     assert ra.s2_api_key() == "env-key"
 
 
-def test_no_key_configured_is_not_an_error(monkeypatch):
+def test_no_key_configured_is_not_an_error(no_key):
     """S2 works unauthenticated, just with more 429s, so a missing key must
     degrade rather than raise."""
-    monkeypatch.delenv("S2_API_KEY", raising=False)
-    assert isinstance(ra.s2_api_key(), str)
+    assert ra.s2_api_key() == ""
+    assert ra.s2_api_key_source() == ("", "")
+
+
+# The key file is the only source the weekly run can see: launchd gives a job PATH
+# and HOME, not the shell's exports, and config.py cannot hold a key because it is
+# tracked in a public repository. So these are the tests that decide whether the
+# unattended run is authenticated at all.
+
+def test_the_key_file_is_read_and_trimmed(no_key):
+    """Written with a text editor or `echo`, so it ends in a newline. Sent as an
+    HTTP header, where a trailing newline is not a value, it is an invalid header."""
+    (no_key / "s2_api_key").write_text("file-key\n")
+    assert ra.s2_api_key() == "file-key"
+
+
+def test_the_environment_wins_over_the_key_file(no_key, monkeypatch):
+    """So CI can inject a key for one run without writing a credential to disk."""
+    (no_key / "s2_api_key").write_text("file-key\n")
+    monkeypatch.setenv("S2_API_KEY", "env-key")
+    assert ra.s2_api_key() == "env-key"
+
+
+def test_the_key_file_wins_over_config(no_key, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "S2_API_KEY", "config-key", raising=False)
+    (no_key / "s2_api_key").write_text("file-key\n")
+    assert ra.s2_api_key() == "file-key"
+
+
+def test_config_is_still_honoured_for_a_fork_that_keeps_it_private(no_key, monkeypatch):
+    import config
+    monkeypatch.setattr(config, "S2_API_KEY", "config-key", raising=False)
+    assert ra.s2_api_key_source() == ("config-key", ra.CONFIG_SOURCE)
+
+
+def test_an_empty_key_file_falls_through_instead_of_masking_config(no_key, monkeypatch):
+    """A file left behind by a rotation, or truncated by a failed write. Treating
+    it as a key would authenticate with the empty string and read as "throttled for
+    no reason" -- while config.py sat there holding a working one."""
+    import config
+    monkeypatch.setattr(config, "S2_API_KEY", "config-key", raising=False)
+    (no_key / "s2_api_key").write_text("\n")
+    assert ra.s2_api_key() == "config-key"
+
+
+def test_an_unreadable_key_file_is_not_an_error(no_key):
+    """A directory where the file should be, or one saved with no read permission.
+    The pipeline works unauthenticated, so this may not take the run down."""
+    (no_key / "s2_api_key").mkdir()
+    assert ra.s2_api_key() == ""
+
+
+def test_each_source_names_itself(no_key, monkeypatch):
+    """The source is printed, so a key that is being shadowed can be found. Naming
+    the wrong one would send someone to edit a file that is not in play."""
+    monkeypatch.setenv("S2_API_KEY", "k")
+    assert ra.s2_api_key_source()[1] == ra.ENV_SOURCE
+    monkeypatch.delenv("S2_API_KEY")
+    (no_key / "s2_api_key").write_text("k")
+    assert ra.s2_api_key_source()[1] == str(no_key / "s2_api_key")
+
+
+def test_the_key_file_lives_outside_the_repository():
+    """Inside it, one `git add -A` publishes the key -- the mistake the whole
+    arrangement exists to prevent. Deliberately not using the `no_key` fixture:
+    the value under test is the module's own default, not a stub of it."""
+    repo = os.path.dirname(os.path.abspath(ra.__file__))
+    assert not os.path.abspath(ra.KEY_FILE).startswith(repo + os.sep)
+    assert os.path.isabs(ra.KEY_FILE), "a relative path resolves against the cwd"
 
 
 def test_s2_is_available_when_not_in_cooldown():

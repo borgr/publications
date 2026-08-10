@@ -165,8 +165,8 @@ def _host_of(url: str) -> str:
 # every other anonymous caller, which is why a long run gets 429s almost
 # immediately -- on a real run, from the second paper onward. A free key is
 # slower on paper (1 RPS) but it is 1 RPS reserved for you, so it actually
-# completes. Request one at https://www.semanticscholar.org/product/api and set
-# it in config.py as S2_API_KEY, or in the S2_API_KEY environment variable.
+# completes. Request one at https://www.semanticscholar.org/product/api and put it
+# where KEY_FILE points, below.
 #
 # Without a key this still works, just with more waiting: a 429 pauses S2 for a
 # cooldown rather than disabling it for the whole run. Disabling it was the worse
@@ -176,14 +176,58 @@ _S2_COOLDOWN_SECONDS = 120
 _s2_state = {"blocked_until": 0.0}
 
 
-def s2_api_key() -> str:
-    """The Semantic Scholar API key, from config.py or the environment."""
+# Where the key is looked for, in order. config.py has a slot for it and is the
+# obvious place to put one, which is the problem: config.py is tracked and this
+# repository is public, so filling that slot in works perfectly and then publishes
+# the key on the next `git add -A`. The slot is kept for a fork that keeps its
+# config private, and listed last.
+#
+# The file is what the unattended run reads. An exported variable covers a terminal
+# and covers CI, but launchd hands a job PATH and HOME and none of the shell's
+# exports -- so a key in .zshrc would cover every run except the weekly one that
+# does the most lookups, which is the run whose throttling nobody is watching.
+#
+# A file rather than the keychain, unlike the Overleaf token: that one is a
+# password git itself has to answer a prompt with, while this is a header value
+# this code sends, so there is nothing to hand to a credential helper. Outside
+# every worktree either way.
+KEY_FILE = os.path.expanduser("~/.config/publications/s2_api_key")
+
+ENV_SOURCE = "the S2_API_KEY environment variable"
+FILE_SOURCE = KEY_FILE
+CONFIG_SOURCE = "config.py"
+
+
+def s2_api_key_source() -> tuple[str, str]:
+    """The Semantic Scholar API key and where it was found, or ("", "") for none.
+
+    The source is reported rather than just the key, so a run says which of the
+    three places is in play. Two of them are easy to edit without effect -- a
+    variable exported in a shell the scheduled run never sees, or a config.py slot
+    shadowed by a key file left behind from before -- and the failure either way is
+    invisible: the run is simply throttled, as if no key had ever been requested.
+    """
+    key = os.environ.get("S2_API_KEY", "").strip()
+    if key:
+        return key, ENV_SOURCE
+    try:
+        with open(KEY_FILE, encoding="utf-8") as fh:
+            key = fh.read().strip()
+    except OSError:
+        key = ""
+    if key:
+        return key, FILE_SOURCE
     try:
         import config
-        key = getattr(config, "S2_API_KEY", "") or ""
+        key = (getattr(config, "S2_API_KEY", "") or "").strip()
     except Exception:
         key = ""
-    return (key or os.environ.get("S2_API_KEY", "")).strip()
+    return (key, CONFIG_SOURCE) if key else ("", "")
+
+
+def s2_api_key() -> str:
+    """The Semantic Scholar API key, or "" if none is configured."""
+    return s2_api_key_source()[0]
 
 
 def s2_available() -> bool:

@@ -115,9 +115,29 @@ but actually completes. It matters more than it looks: the ACL Anthology and
 OpenReview are both reached *through* Semantic Scholar, so losing it loses three
 sources.
 
-Request one at <https://www.semanticscholar.org/product/api>, then set
-`S2_API_KEY` in `config.py` or in the environment. Without a key everything still
-works, with more waiting.
+Request one at <https://www.semanticscholar.org/product/api>, then put it in a
+file outside the repository:
+
+```bash
+mkdir -p ~/.config/publications
+printf '%s' 'YOUR_KEY' > ~/.config/publications/s2_api_key
+chmod 600 ~/.config/publications/s2_api_key
+```
+
+**Not** in `config.py`, even though it has a slot for it: that file is tracked and
+this repository is public, so a key there is one `git add -A` from being
+published. `tests/test_no_secrets.py` fails the build if one ever is. The slot is
+kept for a fork that keeps its config private.
+
+The file, rather than an exported `S2_API_KEY`, because launchd hands a scheduled
+job `PATH` and `HOME` and none of the shell's exports — a key in `.zshrc` would
+cover every run except the weekly one that does the most lookups. Order of
+precedence is environment, then this file, then `config.py`; the environment comes
+first so CI can inject a key for one run without writing it to disk. Each run
+prints which of the three it is using, since a key being shadowed by another
+source is otherwise invisible.
+
+Without a key everything still works, with more waiting.
 
 ## Scheduling
 
