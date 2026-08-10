@@ -28,20 +28,10 @@ from bib_utils import extract_field, is_wellformed_entry
 _REAL_CURL_GET = ra._curl_get
 
 
-@pytest.fixture(autouse=True)
-def offline(monkeypatch):
-    """No network, no sleeping, and no S2 cooldown inherited from another test.
-
-    _s2_state and _net_state are module-global: a test that trips the cooldown
-    would otherwise make every later S2 test see a paused source and pass for the
-    wrong reason, and a leftover unanswered count would make a later test think
-    its own lookup went missing.
-    """
-    monkeypatch.setattr(ra, "_curl_get",
-                        lambda url, **kw: pytest.fail(f"unstubbed network call: {url}"))
-    monkeypatch.setattr(ra.time, "sleep", lambda _s: None)
-    monkeypatch.setitem(ra._s2_state, "blocked_until", 0.0)
-    monkeypatch.setitem(ra._net_state, "unanswered", 0)
+def _forbidden(url, **kw):
+    """A door out that must not be used. For asserting an answer came from memory:
+    a cache that is merely fast is indistinguishable from one that is not there."""
+    pytest.fail(f"a request was made when none was needed: {url}")
 
 
 def curl(monkeypatch, responses):
@@ -164,9 +154,13 @@ def test_s2_is_available_when_not_in_cooldown():
     assert ra.s2_available() is True
 
 
+def _pause(host, until):
+    ra._state_for(host)["blocked_until"] = until
+
+
 def test_s2_is_unavailable_during_the_cooldown(monkeypatch):
     monkeypatch.setattr(ra.time, "time", lambda: 100.0)
-    monkeypatch.setitem(ra._s2_state, "blocked_until", 160.0)
+    _pause(ra._S2_HOST, 160.0)
     assert ra.s2_available() is False
 
 
@@ -175,10 +169,10 @@ def test_the_cooldown_expires_and_says_so(monkeypatch, capsys):
     bug: the ACL Anthology and OpenReview are both reached through S2, so losing
     it lost all three sources."""
     monkeypatch.setattr(ra.time, "time", lambda: 200.0)
-    monkeypatch.setitem(ra._s2_state, "blocked_until", 160.0)
+    _pause(ra._S2_HOST, 160.0)
     assert ra.s2_available() is True
     assert "cooldown over" in capsys.readouterr().out
-    assert ra._s2_state["blocked_until"] == 0.0
+    assert ra._state_for(ra._S2_HOST)["blocked_until"] == 0.0
 
 
 # ── _http_get_json ───────────────────────────────────────────────────────────
@@ -202,25 +196,45 @@ def test_json_is_returned_on_success(monkeypatch):
     assert ra._http_get_json("https://x/") == {"a": 1}
 
 
-def test_the_api_key_is_sent_as_a_header(monkeypatch):
+_S2_URL = "https://api.semanticscholar.org/graph/v1/paper/arXiv:1706.03762"
+
+
+def _headers_for(monkeypatch, url):
     seen = {}
-    monkeypatch.setenv("S2_API_KEY", "secret-key")
 
     def _open(req, timeout=0):
         seen.update(req.headers)
         return _Resp({})
     monkeypatch.setattr(ra, "urlopen", _open)
-    ra._http_get_json("https://x/")
+    ra._http_get_json(url)
+    return seen
+
+
+def test_the_api_key_is_sent_as_a_header(monkeypatch):
+    monkeypatch.setenv("S2_API_KEY", "secret-key")
     # urllib title-cases header names.
-    assert seen.get("X-api-key") == "secret-key"
+    assert _headers_for(monkeypatch, _S2_URL).get("X-api-key") == "secret-key"
+
+
+def test_the_api_key_is_sent_only_to_semantic_scholar(monkeypatch):
+    """This helper also fetches OpenReview, which used to receive the key too.
+
+    Nothing broke, because OpenReview ignores a header it does not know. But a
+    credential was leaving for a host it does not belong to, on every OpenReview
+    lookup, and the one place a token should never be sent is somewhere that has no
+    use for it -- there is nothing to gain and a whole third party to trust.
+    """
+    monkeypatch.setenv("S2_API_KEY", "secret-key")
+    seen = _headers_for(monkeypatch, "https://api2.openreview.net/notes/abc")
+    assert "X-api-key" not in seen, "the S2 key was sent to OpenReview"
 
 
 def test_no_request_is_made_while_s2_is_paused(monkeypatch):
     monkeypatch.setattr(ra.time, "time", lambda: 0.0)
-    monkeypatch.setitem(ra._s2_state, "blocked_until", 99.0)
+    _pause(ra._S2_HOST, 99.0)
     monkeypatch.setattr(ra, "urlopen",
                         lambda *a, **k: pytest.fail("called S2 during its cooldown"))
-    assert ra._http_get_json("https://x/") is None
+    assert ra._http_get_json(_S2_URL) is None
 
 
 def test_a_429_is_retried_once_before_giving_up(monkeypatch):
@@ -242,8 +256,9 @@ def test_a_second_429_pauses_s2_rather_than_disabling_it(monkeypatch, capsys):
     def _open(req, timeout=0):
         raise OSError("HTTP Error 429")
     monkeypatch.setattr(ra, "urlopen", _open)
-    assert ra._http_get_json("https://x/") is None
-    assert ra._s2_state["blocked_until"] == 1000.0 + ra._S2_COOLDOWN_SECONDS
+    assert ra._http_get_json(_S2_URL) is None
+    assert (ra._state_for(ra._S2_HOST)["blocked_until"]
+            == 1000.0 + ra._S2_COOLDOWN_SECONDS_ANON)
     assert "pausing it" in capsys.readouterr().out
 
 
@@ -255,17 +270,138 @@ def test_a_code_attribute_counts_as_a_429_too(monkeypatch):
 
     monkeypatch.setattr(ra.time, "time", lambda: 0.0)
     monkeypatch.setattr(ra, "urlopen", lambda *a, **k: (_ for _ in ()).throw(Boom()))
-    assert ra._http_get_json("https://x/") is None
-    assert ra._s2_state["blocked_until"] > 0
+    assert ra._http_get_json(_S2_URL) is None
+    assert ra._state_for(ra._S2_HOST)["blocked_until"] > 0
 
 
 def test_a_non_429_error_returns_none_without_pausing_s2(monkeypatch, capsys):
     """A 404 for one paper says nothing about the next one."""
     monkeypatch.setattr(ra, "urlopen",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("404")))
-    assert ra._http_get_json("https://x/", retries=1) is None
-    assert ra._s2_state["blocked_until"] == 0.0
+    assert ra._http_get_json(_S2_URL, retries=1) is None
+    assert ra._state_for(ra._S2_HOST)["blocked_until"] == 0.0
     assert "HTTP error" in capsys.readouterr().err
+
+
+# ── one source's rate limit is not another's ─────────────────────────────────
+#
+# This helper serves OpenReview as well as Semantic Scholar, and the cooldown used
+# to be a single module-global. So an S2 429 stopped every OpenReview lookup for
+# two minutes, and an OpenReview 429 paused S2 -- each source silenced for the
+# other's rate limit, and, because a cooldown is recorded as "no answer", each
+# reported as having nothing to say about papers it had never been asked about.
+
+_OR_URL = "https://api2.openreview.net/notes/abc"
+
+
+def test_a_paused_s2_does_not_stop_openreview(monkeypatch):
+    monkeypatch.setattr(ra.time, "time", lambda: 0.0)
+    _pause(ra._S2_HOST, 99.0)
+    monkeypatch.setattr(ra, "urlopen", lambda req, timeout=0: _Resp({"ok": True}))
+    assert ra._http_get_json(_OR_URL) == {"ok": True}
+
+
+def test_a_paused_openreview_does_not_stop_s2(monkeypatch):
+    monkeypatch.setattr(ra.time, "time", lambda: 0.0)
+    _pause("api2.openreview.net", 99.0)
+    monkeypatch.setattr(ra, "urlopen", lambda req, timeout=0: _Resp({"ok": True}))
+    assert ra._http_get_json(_S2_URL) == {"ok": True}
+
+
+def test_a_429_pauses_the_host_that_sent_it(monkeypatch):
+    monkeypatch.setattr(ra.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(ra, "urlopen",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("429")))
+    ra._http_get_json(_OR_URL)
+    assert ra._state_for("api2.openreview.net")["blocked_until"] > 0
+    assert ra._state_for(ra._S2_HOST)["blocked_until"] == 0.0, (
+        "OpenReview's rate limit paused Semantic Scholar")
+
+
+# ── pacing ───────────────────────────────────────────────────────────────────
+#
+# Measured: with a key, five sequential lookups spaced 1.1s apart still returned
+# two 429s. Sprinting into a refusal costs the cooldown that follows it, so the
+# cheaper move is to wait a second before asking. The saving compounds -- a real
+# run does 27 arXiv lookups, and each 429 used to cost a 30s wait and could end in
+# a two-minute pause that takes the ACL Anthology and OpenReview down with it.
+
+def _timeline(monkeypatch):
+    """A clock that only advances when something sleeps, so waits are observable
+    without the suite actually waiting."""
+    now = [0.0]
+    slept = []
+    monkeypatch.setattr(ra.time, "time", lambda: now[0])
+
+    def _sleep(seconds):
+        slept.append(seconds)
+        now[0] += seconds
+    monkeypatch.setattr(ra.time, "sleep", _sleep)
+    monkeypatch.setattr(ra, "urlopen", lambda req, timeout=0: _Resp({}))
+    return slept
+
+
+def test_the_first_request_to_a_host_does_not_wait(monkeypatch):
+    slept = _timeline(monkeypatch)
+    ra._http_get_json(_S2_URL)
+    assert slept == [], "waited before the first request, for no reason"
+
+
+def test_a_second_request_waits_out_the_spacing(monkeypatch):
+    slept = _timeline(monkeypatch)
+    ra._http_get_json(_S2_URL)
+    ra._http_get_json(_S2_URL)
+    assert slept and abs(slept[0] - ra._S2_SPACING_SECONDS_ANON) < 0.01
+
+
+def test_a_key_buys_a_shorter_wait(monkeypatch):
+    """1 RPS reserved beats a share of the anonymous pool, so the paced interval
+    is the reserved one rather than the cautious one."""
+    monkeypatch.setenv("S2_API_KEY", "k")
+    slept = _timeline(monkeypatch)
+    ra._http_get_json(_S2_URL)
+    ra._http_get_json(_S2_URL)
+    assert slept and abs(slept[0] - ra._S2_SPACING_SECONDS) < 0.01
+    assert ra._S2_SPACING_SECONDS < ra._S2_SPACING_SECONDS_ANON
+
+
+def test_a_key_buys_a_shorter_cooldown(monkeypatch):
+    """Authenticated, a 429 is S2 being busy and the quota is per-second.
+    Unauthenticated, it is the global pool being exhausted by other people, which
+    waiting a short time does not fix."""
+    monkeypatch.setenv("S2_API_KEY", "k")
+    assert ra._s2_limits()[1] == ra._S2_COOLDOWN_SECONDS
+    monkeypatch.delenv("S2_API_KEY")
+    assert ra._s2_limits()[1] == ra._S2_COOLDOWN_SECONDS_ANON
+    assert ra._S2_COOLDOWN_SECONDS < ra._S2_COOLDOWN_SECONDS_ANON
+
+
+def test_time_already_spent_elsewhere_counts_towards_the_spacing(monkeypatch):
+    """The gap is measured from the last request, not slept unconditionally. A
+    ladder that spent four seconds on DBLP has already waited out S2's interval,
+    and sleeping again would add a second per paper for nothing."""
+    slept = _timeline(monkeypatch)
+    ra._http_get_json(_S2_URL)
+    ra.time.sleep(30.0)          # as another source in the ladder would
+    slept.clear()
+    ra._http_get_json(_S2_URL)
+    assert slept == [], "waited even though the interval had already passed"
+
+
+def test_pacing_is_per_host(monkeypatch):
+    """A request to S2 must not make OpenReview wait its turn."""
+    slept = _timeline(monkeypatch)
+    ra._http_get_json(_S2_URL)
+    ra._http_get_json(_OR_URL)
+    assert slept == []
+
+
+def test_the_rate_limit_state_can_be_reset(monkeypatch):
+    """A long-lived process should not inherit an hour-old cooldown."""
+    _pause(ra._S2_HOST, 1e12)
+    ra.reset_rate_limits()
+    monkeypatch.setattr(ra, "urlopen", lambda req, timeout=0: _Resp({"ok": True}))
+    assert ra._http_get_json(_S2_URL) == {"ok": True}
 
 
 def test_a_transient_error_is_retried(monkeypatch):
@@ -383,6 +519,64 @@ def test_the_host_is_named_when_a_request_goes_unanswered(monkeypatch, capsys):
     assert "dblp.org" in capsys.readouterr().out
 
 
+def test_a_source_that_keeps_refusing_is_paused(monkeypatch):
+    """The four sources reached through curl used to be the unmetered half of the
+    ladder: a rate-limiting DBLP was asked again, three times with backoff, for
+    every remaining paper -- most of a run's requests going to a source that had
+    already stopped answering."""
+    calls = _curl_returning(monkeypatch, _Result(0, "<html>429</html>"))
+    reject_html = {"accept": lambda b: not b.startswith("<")}
+    assert ra._curl_get("https://dblp.org/x", **reject_html) is None
+    assert len(calls) == ra._CURL_TRIES
+
+    before = len(calls)
+    assert ra._curl_get("https://dblp.org/y", **reject_html) is None
+    assert len(calls) == before, "the paused host was asked again"
+
+
+def test_a_transport_failure_does_not_pause_the_host(monkeypatch):
+    """Only a reply the caller rejected is the source refusing. A request that
+    never completed is the network, and pausing a whole source over one dropped
+    connection would lose every later paper's lookup for a minute."""
+    calls = _curl_returning(monkeypatch, _Result(7, ""))
+    ra._curl_get("https://dblp.org/x")
+    before = len(calls)
+    ra._curl_get("https://dblp.org/y")
+    assert len(calls) > before
+
+
+def test_a_paused_source_is_an_unanswered_lookup_not_an_empty_result(monkeypatch):
+    """Same rule as everywhere else: a request that was not made is not evidence
+    that the paper is unpublished, and the attempt counter must not charge it to
+    the paper."""
+    _curl_returning(monkeypatch, _Result(0, "<html>429</html>"))
+    reject_html = {"accept": lambda b: not b.startswith("<")}
+    ra._curl_get("https://dblp.org/x", **reject_html)
+    before = ra.unanswered_lookups()
+    assert ra._curl_get("https://dblp.org/y", **reject_html) is None
+    assert ra.unanswered_lookups() == before + 1
+
+
+def test_curl_requests_to_one_host_are_spaced_out(monkeypatch):
+    calls = _curl_returning(monkeypatch, _Result(0, "@article{a,}"))
+    slept = _timeline(monkeypatch)
+    ra._curl_get("https://dblp.org/x")
+    assert slept == [], "the first request to a host has nothing to wait for"
+    ra._curl_get("https://dblp.org/y")
+    assert slept == [ra._DEFAULT_SPACING_SECONDS]
+    assert len(calls) == 2
+
+
+def test_curl_pacing_is_per_host(monkeypatch):
+    """A run walks down the ladder, so consecutive requests are usually to
+    different hosts. Spacing them against each other would be pure delay."""
+    _curl_returning(monkeypatch, _Result(0, "@article{a,}"))
+    slept = _timeline(monkeypatch)
+    ra._curl_get("https://dblp.org/x")
+    ra._curl_get("https://arxiv.org/abs/2401.00001")
+    assert slept == []
+
+
 # ── DBLP ─────────────────────────────────────────────────────────────────────
 
 def test_dblp_results_are_split_into_entries(monkeypatch):
@@ -470,10 +664,157 @@ def test_an_empty_s2_response_is_no_match(monkeypatch, payload):
 
 def test_s2_by_arxiv_asks_for_the_fields_the_crosswalk_needs(monkeypatch):
     seen = []
-    monkeypatch.setattr(ra, "_http_get_json", lambda url: seen.append(url) or {})
+    monkeypatch.setattr(ra, "_http_get_json",
+                        lambda url, **kw: seen.append(url) or {})
     ra.query_s2_by_arxiv("2401.00001")
     assert "arXiv:2401.00001" in seen[0]
     assert "externalIds" in seen[0]
+
+
+# ── Semantic Scholar, in one request ─────────────────────────────────────────
+#
+# The rung that made the difference. Per-paper lookups spent a request each and
+# ran out of budget partway through, which the ladder cannot distinguish from S2
+# not having the paper -- so these tests are mostly about what counts as an answer.
+
+def _batch(monkeypatch, reply):
+    """Stub the batch POST. `reply` is the decoded body, or a callable given the
+    list of ids that were asked for. Returns the requests that were made."""
+    calls = []
+
+    def _get(url, retries=2, data=None):
+        asked = json.loads(data)["ids"] if data else None
+        calls.append({"url": url, "ids": asked})
+        return reply(asked) if callable(reply) else reply
+
+    monkeypatch.setattr(ra, "_http_get_json", _get)
+    return calls
+
+
+def test_the_batch_request_is_a_post_s2_will_accept(monkeypatch):
+    """Through the real _http_get_json, not a stub of it: S2 rejects a body sent
+    without this content type, and a rejected batch is invisible -- every paper
+    just falls through to the per-paper lookups the batch was there to avoid."""
+    sent = {}
+
+    def _open(req, timeout=0):
+        sent.update(headers=req.headers, body=req.data, method=req.get_method())
+        return _Resp([{"paperId": "a"}])
+    monkeypatch.setattr(ra, "urlopen", _open)
+
+    assert ra.prefetch_s2_by_arxiv(["2401.00001"]) == 1
+    assert sent["method"] == "POST"
+    assert sent["headers"].get("Content-type") == "application/json"
+    assert json.loads(sent["body"]) == {"ids": ["arXiv:2401.00001"]}
+
+
+def test_one_request_covers_every_paper(monkeypatch):
+    calls = _batch(monkeypatch, [{"externalIds": {"DOI": "10.1/a"}},
+                                 {"externalIds": {"DOI": "10.1/b"}}])
+    assert ra.prefetch_s2_by_arxiv(["2401.00001", "2401.00002"]) == 2
+    assert len(calls) == 1, "one POST, not one request per paper"
+    assert calls[0]["ids"] == ["arXiv:2401.00001", "arXiv:2401.00002"]
+
+
+def test_a_prefetched_answer_is_reused_without_a_request(monkeypatch):
+    _batch(monkeypatch, [{"externalIds": {"DOI": "10.1/a"}}])
+    ra.prefetch_s2_by_arxiv(["2401.00001"])
+    monkeypatch.setattr(ra, "_http_get_json", _forbidden)
+    assert ra.query_s2_by_arxiv("2401.00001")["externalIds"]["DOI"] == "10.1/a"
+
+
+def test_a_paper_s2_does_not_have_is_an_answer_too(monkeypatch):
+    """The batch endpoint returns an explicit null for a paper it cannot find.
+
+    That is a definitive negative and is remembered as one, so the lookup returns
+    None without spending a request. The distinction matters because None from a
+    failed request means "ask something else", and this None means "S2 has
+    nothing" -- same value, and only the cache knows which.
+    """
+    _batch(monkeypatch, [None])
+    assert ra.prefetch_s2_by_arxiv(["2401.00001"]) == 1
+    monkeypatch.setattr(ra, "_http_get_json", _forbidden)
+    assert ra.query_s2_by_arxiv("2401.00001") is None
+
+
+def test_a_definitive_negative_is_not_counted_as_a_missing_answer(monkeypatch):
+    """Unlike a cooldown or a 429, which are."""
+    _batch(monkeypatch, [None])
+    ra.prefetch_s2_by_arxiv(["2401.00001"])
+    monkeypatch.setattr(ra, "_http_get_json", _forbidden)
+    before = ra.unanswered_lookups()
+    ra.query_s2_by_arxiv("2401.00001")
+    assert ra.unanswered_lookups() == before
+
+
+def test_a_paper_the_batch_missed_still_gets_its_own_lookup(monkeypatch):
+    """The prefetch is an optimisation, not a gate. Whatever it did not cover --
+    because the request failed, or because the id was added later -- falls through
+    to the per-paper lookup exactly as it did before there was a prefetch."""
+    _batch(monkeypatch, [{"externalIds": {"DOI": "10.1/a"}}])
+    ra.prefetch_s2_by_arxiv(["2401.00001"])
+    seen = []
+    monkeypatch.setattr(ra, "_http_get_json",
+                        lambda url, **kw: seen.append(url) or {"paperId": "x"})
+    assert ra.query_s2_by_arxiv("2402.99999") == {"paperId": "x"}
+    assert len(seen) == 1
+
+
+def test_a_failed_batch_remembers_nothing(monkeypatch):
+    _batch(monkeypatch, None)
+    assert ra.prefetch_s2_by_arxiv(["2401.00001", "2401.00002"]) == 0
+    assert ra._s2_batch == {}
+
+
+@pytest.mark.parametrize("reply", [
+    {"error": "too many ids"},          # an error object, not a list of papers
+    [{"paperId": "a"}],                 # shorter than what was asked for
+    [{"paperId": "a"}, {}, {}],         # longer
+    "not json at all",
+])
+def test_a_reply_that_does_not_line_up_is_discarded(monkeypatch, reply):
+    """The batch endpoint answers positionally, so a length that does not match
+    leaves no way to tell which record belongs to which paper. Guessing would be
+    worse than not answering -- it would resolve a preprint to somebody else's
+    paper, with a real DOI, and nothing downstream would flag it."""
+    _batch(monkeypatch, reply)
+    assert ra.prefetch_s2_by_arxiv(["2401.00001", "2401.00002"]) == 0
+    assert ra._s2_batch == {}
+
+
+def test_a_paper_is_asked_about_once_across_two_prefetches(monkeypatch):
+    calls = _batch(monkeypatch, lambda ids: [{"paperId": i} for i in ids])
+    ra.prefetch_s2_by_arxiv(["2401.00001"])
+    ra.prefetch_s2_by_arxiv(["2401.00001", "2401.00002"])
+    assert calls[1]["ids"] == ["arXiv:2401.00002"]
+
+
+def test_a_repeated_id_is_asked_about_once(monkeypatch):
+    calls = _batch(monkeypatch, lambda ids: [{"paperId": i} for i in ids])
+    ra.prefetch_s2_by_arxiv(["2401.00001", "2401.00001"])
+    assert calls[0]["ids"] == ["arXiv:2401.00001"]
+
+
+def test_nothing_to_ask_about_makes_no_request(monkeypatch):
+    calls = _batch(monkeypatch, [])
+    assert ra.prefetch_s2_by_arxiv([]) == 0
+    assert ra.prefetch_s2_by_arxiv([None, ""]) == 0
+    assert calls == []
+
+
+def test_more_papers_than_one_request_allows_are_split(monkeypatch):
+    calls = _batch(monkeypatch, lambda ids: [{"paperId": i} for i in ids])
+    n = ra._S2_BATCH_LIMIT + 10
+    ids = [f"2401.{i:05d}" for i in range(n)]
+    assert ra.prefetch_s2_by_arxiv(ids) == n
+    assert [len(c["ids"]) for c in calls] == [ra._S2_BATCH_LIMIT, 10]
+
+
+def test_the_prefetch_can_be_forgotten(monkeypatch):
+    _batch(monkeypatch, [{"paperId": "a"}])
+    ra.prefetch_s2_by_arxiv(["2401.00001"])
+    ra.forget_s2_batch()
+    assert ra._s2_batch == {}
 
 
 # ── ACL Anthology ────────────────────────────────────────────────────────────
@@ -874,6 +1215,7 @@ def cli(tmp_path, monkeypatch):
     """Drive main() with every source stubbed and every path inside tmp_path."""
     monkeypatch.setattr(ra, "ATTEMPTS_PATH", str(tmp_path / "attempts.json"))
     monkeypatch.setattr(ra, "get_missing_bib_entries", lambda text, df=None: [])
+    monkeypatch.setattr(ra, "prefetch_s2_by_arxiv", lambda ids: 0)
     monkeypatch.setattr(ra, "resolve",
                         lambda title, arxiv_id, key, content="", store=None: (
                             f"@inproceedings{{{key},\n  title = {{{title}}},\n"
@@ -953,3 +1295,23 @@ def test_an_empty_bib_produces_an_empty_output(cli):
     empty.write_text("")
     ra.main(["--bib", str(empty), "--output", out])
     assert open(out).read() == "", "a fresh fork has no entries and must not crash"
+
+
+def test_the_run_asks_s2_about_every_candidate_before_resolving_any(cli, monkeypatch):
+    """The prefetch is only worth anything if it happens once, up front. Asked
+    per paper it would be the per-paper lookup it replaces."""
+    asked = []
+    monkeypatch.setattr(ra, "prefetch_s2_by_arxiv",
+                        lambda ids: asked.append(list(ids)) or len(asked[-1]))
+    _tmp, bib, out = cli
+    ra.main(["--bib", bib, "--output", out])
+    assert asked == [["2401.00001"]]
+
+
+def test_what_the_prefetch_covered_is_reported(cli, monkeypatch, capsys):
+    """Otherwise a working prefetch and a silently failing one look the same, and
+    the difference is the whole run's request budget."""
+    monkeypatch.setattr(ra, "prefetch_s2_by_arxiv", lambda ids: 7)
+    _tmp, bib, out = cli
+    ra.main(["--bib", bib, "--output", out])
+    assert "7" in capsys.readouterr().out

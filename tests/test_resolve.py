@@ -57,17 +57,10 @@ def test_repeatedly_failing_entries_sort_last():
 # search returned a confidently wrong paper 2 times in 5 without raising, so it
 # is wired in for DOIs only. These tests stub it out: no network in the suite.
 
-class _NoSleep:
-    @staticmethod
-    def sleep(_seconds):
-        pass
-
-
 def test_doi_lookup_is_used_when_a_doi_is_known(monkeypatch):
     """Fills a real gap: this module has no other DOI resolver."""
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
                         lambda: lambda ident: f"@article{{zotero_key, doi={{{ident}}}}}")
 
@@ -83,7 +76,6 @@ def test_doi_lookup_is_used_when_a_doi_is_known(monkeypatch):
 def test_doi_is_taken_from_the_existing_entry_when_not_yet_recorded(monkeypatch):
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
                         lambda: lambda ident: f"@article{{z, doi={{{ident}}}}}")
     bib, source = resolve("A Journal Paper With A Long Enough Title", None, "k1",
@@ -97,7 +89,7 @@ def test_title_is_never_passed_to_clibib(monkeypatch):
     seen = []
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
     monkeypatch.setattr(resolve_arxiv, "fetch_arxiv_bib", lambda a, k: "")
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch",
                         lambda: lambda ident: seen.append(ident) or "@misc{z}")
@@ -110,7 +102,7 @@ def test_doi_lookup_is_skipped_when_clibib_is_absent(monkeypatch):
     """clibib is optional; without it the resolver behaves as it did before."""
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
-    monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t: None)
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: None)
     store = IdentityStore()
     store.record("k1", doi="10.1/x")
@@ -208,11 +200,10 @@ _TITLE = "A Paper With A Title Long Enough To Search On"
 def ladder(monkeypatch):
     """Every source stubbed to return nothing; a test enables the ones it needs.
 
-    Anything left unstubbed would reach the network, so they are all closed by
-    default rather than listed per test.
+    Closed by default rather than listed per test: conftest.py fails a test that
+    reaches the network, and a test about which rung wins should say which rungs
+    answered, not discover it from whichever ones happened to be left open.
     """
-    monkeypatch.setattr(resolve_arxiv, "time", _NoSleep)
-    resolve_arxiv.reset_unanswered_lookups()
     closed = {
         "search_dblp": lambda t: [],
         "query_s2_by_arxiv": lambda a: None,

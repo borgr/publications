@@ -137,7 +137,34 @@ first so CI can inject a key for one run without writing it to disk. Each run
 prints which of the three it is using, since a key being shadowed by another
 source is otherwise invisible.
 
-Without a key everything still works, with more waiting.
+Without a key everything still works, with more waiting: requests to Semantic
+Scholar are spaced 3s apart instead of 1.2s, and a refusal pauses it for two
+minutes instead of one.
+
+### How the sources are rationed
+
+Worth knowing if you fork this and point it at a different set of papers, because
+the failure it prevents does not look like a failure.
+
+Every request is spaced and paused **per host**. A refusal from one source used to
+put every source behind the same cooldown, so a busy Semantic Scholar silenced
+OpenReview too — and since a request that was never made is recorded as *"no
+answer"*, not as *"no published version"*, the run would honestly report that it
+had learned nothing about a paper whose ACL entry was sitting right there.
+
+Semantic Scholar is asked about every arXiv ID in the run **in one batch request**,
+before any paper is resolved. This is not only a courtesy. On a real weekly run —
+with a key, and 1.2s between requests — Semantic Scholar refused twice, went into
+cooldown, and 32 of the remaining 34 lookups were never attempted: it contributed
+nothing to that run, and took the ACL Anthology and OpenReview down with it.
+Spacing requests further apart does not fix a budget; making fewer of them does.
+The batch runs with or without a key, since one request is easier on the shared
+anonymous pool than thirty-four.
+
+A source that keeps serving a refusal — DBLP answers rate limiting with an HTML
+error page and HTTP 200 — is paused for the rest of the minute rather than asked
+again, with backoff, for every remaining paper. A request that never completed is
+treated as the network rather than the source, and pauses nothing.
 
 ## Scheduling
 

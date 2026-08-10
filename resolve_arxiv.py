@@ -127,8 +127,17 @@ def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
     `accept` is an optional predicate deciding whether a body counts as a reply.
     It exists because a refusal can arrive wearing an answer's clothes: DBLP
     serves an HTML error page, with status 200, when it is rate-limiting.
+
+    Paced and paused per host on the same terms as _http_get_json, so that the
+    four sources reached through here are not the unmetered half of the ladder.
     """
+    host = _host_of(url)
+    if not host_available(host):
+        _note_unanswered(f"{host} (in cooldown)")
+        return None
+    refused = False
     for attempt in range(tries):
+        _wait_turn(host, _DEFAULT_SPACING_SECONDS)
         replied, body = False, ""
         try:
             result = subprocess.run(
@@ -143,9 +152,20 @@ def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
         # every paper no source indexes yet.
         if replied and (not body or accept is None or accept(body)):
             return body
+        # A body the caller's predicate rejected is the source refusing; a request
+        # that did not complete is the network failing. Only the first is worth
+        # pausing a host over, and the difference is why `accept` exists.
+        refused = refused or (replied and bool(body))
         if attempt < tries - 1:
             time.sleep(_CURL_BACKOFF_SECONDS * (attempt + 1))
-    _note_unanswered(_host_of(url))
+    if refused:
+        # Every later paper would otherwise spend three more requests and six more
+        # seconds being told the same no. Over a full run that is most of the
+        # requests going to a source that has already stopped answering.
+        _state_for(host)["blocked_until"] = time.time() + _DEFAULT_COOLDOWN_SECONDS
+        print(f"\n    {host} kept refusing — pausing it for "
+              f"{_DEFAULT_COOLDOWN_SECONDS}s", end="", flush=True)
+    _note_unanswered(host)
     return None
 
 
@@ -172,8 +192,52 @@ def _host_of(url: str) -> str:
 # cooldown rather than disabling it for the whole run. Disabling it was the worse
 # bug, because the ACL Anthology and OpenReview are both reached *through* S2's
 # externalIds, so losing S2 lost all three.
-_S2_COOLDOWN_SECONDS = 120
-_s2_state = {"blocked_until": 0.0}
+#
+# Measured, not assumed: with the key, five sequential lookups spaced 1.1s apart
+# still returned two 429s, so "1 RPS reserved" is a ceiling and not a promise.
+# Pacing is therefore worth it in both cases, and the numbers differ because the
+# two failures are different. Authenticated, a 429 is S2 being busy, and the quota
+# is per-second, so a short wait clears it. Unauthenticated, a 429 means the global
+# anonymous pool is exhausted by everyone else, which a short wait does not change.
+_S2_HOST = "api.semanticscholar.org"
+_S2_SPACING_SECONDS = 1.2
+_S2_SPACING_SECONDS_ANON = 3.0
+_S2_COOLDOWN_SECONDS = 60
+_S2_COOLDOWN_SECONDS_ANON = 120
+
+# What every other host gets. A single default rather than a table per source:
+# none of the others publishes a rate limit, so any per-host number would be
+# invented, and what matters is only that requests are spread out rather than
+# fired in a burst.
+_DEFAULT_SPACING_SECONDS = 1.0
+_DEFAULT_COOLDOWN_SECONDS = 60
+
+# Keyed by host, because both doors out of here -- _curl_get and _http_get_json --
+# serve several sources each. One shared cooldown meant an S2 429 silenced every
+# OpenReview lookup for two minutes, and an OpenReview 429 put S2 in cooldown:
+# each source made to answer for another's rate limit, and reported as though it
+# had nothing of its own to say.
+_host_state: dict = {}
+
+
+def _state_for(host: str) -> dict:
+    # last_request is None rather than 0.0 for "never asked". Zero would work only
+    # because the epoch is decades in the past, which is an accident of the clock's
+    # origin and not a thing to rely on.
+    return _host_state.setdefault(host, {"blocked_until": 0.0, "last_request": None})
+
+
+def _s2_limits() -> tuple[float, float]:
+    """(spacing, cooldown) for Semantic Scholar, given whether a key is in play."""
+    if s2_api_key():
+        return _S2_SPACING_SECONDS, _S2_COOLDOWN_SECONDS
+    return _S2_SPACING_SECONDS_ANON, _S2_COOLDOWN_SECONDS_ANON
+
+
+def reset_rate_limits() -> None:
+    """Forget every host's pacing and cooldown. For tests, and for a long-lived
+    process that should not inherit a cooldown from an hour ago."""
+    _host_state.clear()
 
 
 # Where the key is looked for, in order. config.py has a slot for it and is the
@@ -230,51 +294,81 @@ def s2_api_key() -> str:
     return s2_api_key_source()[0]
 
 
-def s2_available() -> bool:
-    """False while S2 is in a rate-limit cooldown."""
-    if time.time() < _s2_state["blocked_until"]:
+def host_available(host: str) -> bool:
+    """False while this host is in a rate-limit cooldown."""
+    state = _state_for(host)
+    if time.time() < state["blocked_until"]:
         return False
-    if _s2_state["blocked_until"]:
-        print("\n    S2 cooldown over, using it again", end="", flush=True)
-        _s2_state["blocked_until"] = 0.0
+    if state["blocked_until"]:
+        print(f"\n    {host} cooldown over, using it again", end="", flush=True)
+        state["blocked_until"] = 0.0
     return True
 
 
-def _http_get_json(url: str, retries: int = 2) -> dict | None:
-    """GET JSON, pausing a rate-limited source rather than abandoning it.
+def s2_available() -> bool:
+    """False while Semantic Scholar is in a rate-limit cooldown."""
+    return host_available(_S2_HOST)
+
+
+def _wait_turn(host: str, spacing: float) -> None:
+    """Hold off until `spacing` has passed since the last request to this host.
+
+    Cheaper than the 429 it avoids: sleeping a second before asking beats asking,
+    being refused, and sleeping thirty. It also keeps the failure from being
+    charged to the source -- a 429 is recorded as "no answer", so a paper S2 does
+    index reads as one it does not, and the ladder falls through to the preprint.
+    """
+    state = _state_for(host)
+    if state["last_request"] is not None:
+        gap = state["last_request"] + spacing - time.time()
+        if gap > 0:
+            time.sleep(gap)
+    state["last_request"] = time.time()
+
+
+def _http_get_json(url: str, retries: int = 2, data: bytes | None = None) -> dict | None:
+    """GET (or POST, given a body) JSON, pausing a rate-limited source.
 
     None is always "no answer", never "no such paper", and is counted as such --
     including the cooldown case, where the request is not even attempted. Since
-    the ACL Anthology and OpenReview are both reached through S2, a cooldown
+    the ACL Anthology and OpenReview are both reached through S2, an S2 cooldown
     means three sources are silent rather than one.
     """
-    if not s2_available():
-        _note_unanswered(f"{_host_of(url)} (in cooldown)")
+    host = _host_of(url)
+    if not host_available(host):
+        _note_unanswered(f"{host} (in cooldown)")
         return None
     headers = {"User-Agent": "resolve-arxiv-bib/1.0"}
-    key = s2_api_key()
-    if key:
-        headers["x-api-key"] = key
+    spacing, cooldown = _S2_SPACING_SECONDS, _S2_COOLDOWN_SECONDS
+    if host == _S2_HOST:
+        key = s2_api_key()
+        if key:
+            headers["x-api-key"] = key
+        spacing, cooldown = _s2_limits()
+    if data is not None:
+        headers["Content-Type"] = "application/json"
     for attempt in range(retries):
+        _wait_turn(host, spacing)
         try:
-            req = Request(url, headers=headers)
-            with urlopen(req, timeout=20) as resp:
+            req = Request(url, headers=headers, data=data)
+            with urlopen(req, timeout=30 if data else 20) as resp:
                 return json.loads(resp.read())
         except Exception as exc:
             is_429 = "429" in str(exc) or getattr(exc, "code", None) == 429
             if is_429:
                 if attempt == 0:
-                    print("\n    S2 rate-limited, waiting 30s…", end="", flush=True)
-                    time.sleep(30)
+                    print(f"\n    {host} rate-limited, waiting {cooldown // 2}s…",
+                          end="", flush=True)
+                    time.sleep(cooldown // 2)
                     continue
-                _s2_state["blocked_until"] = time.time() + _S2_COOLDOWN_SECONDS
-                print(f"\n    S2 still rate-limited — pausing it for "
-                      f"{_S2_COOLDOWN_SECONDS}s", end="", flush=True)
-                _note_unanswered(_host_of(url))
+                _state_for(host)["blocked_until"] = time.time() + cooldown
+                print(f"\n    {host} still rate-limited — pausing it for "
+                      f"{cooldown}s", end="", flush=True)
+                _note_unanswered(host)
                 return None
             if attempt == retries - 1:
                 print(f"\n    HTTP error ({exc})", file=sys.stderr, end="")
-                _note_unanswered(_host_of(url))
+                _note_unanswered(host)
                 return None
             time.sleep(3)
     return None
@@ -413,10 +507,69 @@ def pick_published(bibtex_list: list[str], query_title: str = "",
 
 # ── Semantic Scholar ──────────────────────────────────────────────────────────
 
+_S2_FIELDS = "externalIds,publicationVenue"
+_S2_BATCH_LIMIT = 500          # S2's documented maximum ids per batch request
+
+# Answers from the batch endpoint: {arxiv_id: record or None}. Membership is what
+# matters, so a remembered None is "S2 has no such paper" -- an answer -- while an
+# absent key is "not asked yet".
+_s2_batch: dict = {}
+
+
+def prefetch_s2_by_arxiv(arxiv_ids) -> int:
+    """Ask S2 about every arXiv ID in one request. Returns how many it answered.
+
+    Pacing a per-paper lookup was not enough. On the first real unattended run,
+    with a key and 1.2s between requests, S2 refused twice in a row, went into
+    cooldown, and 32 of the remaining 34 lookups were never attempted -- so it
+    contributed nothing, and took the ACL Anthology and OpenReview with it, since
+    both are reached through its externalIds. Waiting longer does not fix a budget;
+    asking fewer times does. One POST covers the whole run.
+
+    Best-effort, and deliberately not gated on having a key: one request is easier
+    on the shared anonymous pool than thirty-four, so it helps more without a key
+    rather than less. If it fails, nothing is remembered and every paper falls
+    through to the per-paper lookup exactly as before.
+    """
+    ids = [a for a in dict.fromkeys(arxiv_ids) if a and a not in _s2_batch]
+    if not ids:
+        return 0
+    answered = 0
+    for start in range(0, len(ids), _S2_BATCH_LIMIT):
+        chunk = ids[start:start + _S2_BATCH_LIMIT]
+        data = _http_get_json(
+            f"https://api.semanticscholar.org/graph/v1/paper/batch?fields={_S2_FIELDS}",
+            data=json.dumps({"ids": [f"arXiv:{a}" for a in chunk]}).encode(),
+        )
+        # A list positionally aligned with what was asked. Anything else -- a dict
+        # carrying an error, a length that does not match -- is not an answer about
+        # these papers, and guessing which record belongs to which id would be
+        # worse than not answering: it would resolve a paper to somebody else's.
+        if not isinstance(data, list) or len(data) != len(chunk):
+            continue
+        for arxiv_id, record in zip(chunk, data):
+            _s2_batch[arxiv_id] = record if isinstance(record, dict) else None
+            answered += 1
+    return answered
+
+
+def forget_s2_batch() -> None:
+    """Drop the prefetched answers. For tests, and for a second pass in one process."""
+    _s2_batch.clear()
+
+
 def query_s2_by_arxiv(arxiv_id: str) -> dict | None:
+    """S2's record for one arXiv ID, from the prefetch when it covered this paper.
+
+    A remembered None means S2 answered and has no such paper, so it is returned
+    without a request and without counting as a lookup that went missing -- the
+    distinction the rest of the ladder is built on.
+    """
+    if arxiv_id in _s2_batch:
+        return _s2_batch[arxiv_id]
     url = (
         f"https://api.semanticscholar.org/graph/v1/paper/arXiv:{arxiv_id}"
-        f"?fields=externalIds,publicationVenue"
+        f"?fields={_S2_FIELDS}"
     )
     return _http_get_json(url)
 
@@ -543,7 +696,6 @@ def search_openalex(title):
             ).ratio()
             if ratio >= _OPENALEX_MIN_RATIO:
                 return work
-        time.sleep(0.4)
     return None
 
 
@@ -766,7 +918,6 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         if published_bib:
             _remember(**harvest_ids_from_bibtex(published_bib))
             return _replace_key(published_bib, original_key), "DBLP"
-    time.sleep(1.0)
 
     # Step 2 — S2 to get ACL / OpenReview IDs
     s2_data = None
@@ -774,7 +925,6 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         s2_data = query_s2_by_arxiv(arxiv_id)
     else:
         s2_data = query_s2_by_title(title, year_m.group(1) if year_m else "")
-    time.sleep(1.5)
 
     if s2_data:
         ext = s2_data.get("externalIds") or {}
@@ -891,7 +1041,14 @@ def main(argv=None) -> None:
     n_deprio = sum(1 for e in candidates if attempts.get(e["item_name"], 0) >= _DEPRIORITIZE_AFTER)
     if n_deprio:
         print(f"  ({n_deprio} entries with ≥{_DEPRIORITIZE_AFTER} prior attempts sorted last)")
-    print(f"Resolving {len(candidates)} candidates...\n")
+    print(f"Resolving {len(candidates)} candidates...")
+
+    # One request for every arXiv ID up front, so the ladder's S2 rung is answered
+    # from memory instead of spending a request -- and a cooldown -- per paper.
+    n_prefetched = prefetch_s2_by_arxiv(_get_arxiv_id(e) for e in candidates)
+    if n_prefetched:
+        print(f"  Semantic Scholar answered for {n_prefetched} of them in one request")
+    print()
 
     resolved_bibs: list[str] = []
     report: list[tuple[str, str, bool]] = []
@@ -925,7 +1082,6 @@ def main(argv=None) -> None:
             # only a published record has anything to give.
             if _is_corr(content) and not _is_corr(bib):
                 updates.append((key, bib, source))
-        time.sleep(0.5)
 
     with open(args.output, "w") as f:
         f.write("\n\n".join(resolved_bibs))
