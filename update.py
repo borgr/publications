@@ -429,16 +429,24 @@ def step3_resolve(dry_run: bool) -> tuple:
         save_attempts(attempts)
         store.save()
 
-    # One request for every arXiv ID before resolving any of them, so that the
-    # ladder's Semantic Scholar rung is answered from memory. This is the run the
-    # batch exists for: on the first weekly run with an API key, S2 was asked
-    # per paper, refused twice, went into cooldown, and 32 of the remaining 34
-    # lookups were never attempted -- taking the ACL Anthology and OpenReview with
-    # it, since both are reached through its externalIds.
+    # Part B's rows are resolved further down, but their identifiers are needed
+    # here: everything this run will ask Semantic Scholar about goes out in one
+    # request, before any of it is resolved.
+    missing_entries = sort_by_attempts(get_missing_bib_entries(bib_text), attempts)
+
+    # This is the run the batch exists for: on the first weekly run with an API
+    # key, S2 was asked per paper, refused twice, went into cooldown, and 32 of the
+    # remaining 34 lookups were never attempted -- taking the ACL Anthology and
+    # OpenReview with it, since both are reached through its externalIds.
     #
-    # Part B below cannot be covered: those rows have no arXiv ID, which is why
-    # they are looked up by title.
-    n_prefetched = prefetch_s2_by_arxiv(_get_arxiv_id(e) for e in arxiv_entries)
+    # A Part B row has no entry to read an arXiv ID from, which is why it is
+    # resolved by title -- but the store may have learned one for it on an earlier
+    # run, and resolve() prefers that to a title search, so those IDs belong in the
+    # request too.
+    n_prefetched = prefetch_s2_by_arxiv(
+        [_get_arxiv_id(e) for e in arxiv_entries]
+        + [(store.records.get(e["item_name"]) or {}).get("arxiv") for e in missing_entries]
+    )
     if n_prefetched:
         print(f"  Semantic Scholar answered for {n_prefetched} of them in one request")
 
@@ -463,7 +471,6 @@ def step3_resolve(dry_run: bool) -> tuple:
             _checkpoint()
 
     # Part B: table rows with no usable entry in orig.bib
-    missing_entries = sort_by_attempts(get_missing_bib_entries(bib_text), attempts)
     new_entries = []
     not_found = []
     unanswered: list = []

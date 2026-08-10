@@ -478,11 +478,15 @@ def step3(tmp_path, monkeypatch):
         def save(self, path=None):
             saved["store"] += 1
 
-    def _run(bib_text="", missing=(), resolver=None, attempts=None):
+    def _run(bib_text="", missing=(), resolver=None, attempts=None, records=None):
         bib.write_text(bib_text)
         monkeypatch.setattr(update, "load_attempts", lambda: dict(attempts or {}))
-        monkeypatch.setattr(update.IdentityStore, "load",
-                            classmethod(lambda cls, path=None: _Store()))
+
+        def _load(cls, path=None):
+            store = _Store()
+            store.records.update(records or {})
+            return store
+        monkeypatch.setattr(update.IdentityStore, "load", classmethod(_load))
         monkeypatch.setattr(update, "get_missing_bib_entries",
                             lambda text: [dict(e) for e in missing])
         monkeypatch.setattr(update, "resolve",
@@ -665,6 +669,21 @@ def test_semantic_scholar_is_asked_about_every_arxiv_id_up_front(step3, monkeypa
             + _ARXIV_ENTRY.format(key="k2", title="Another Paper", eprint="2402.00002"))
     step3(text)
     assert asked == [["2401.00001", "2402.00002"]], "one request, before any resolving"
+
+
+def test_a_missing_rows_remembered_id_goes_out_in_the_same_request(step3, monkeypatch):
+    """A Part B row has no entry to read an arXiv ID from, but the store may have
+    learned one for it earlier, and resolve() prefers that to a title search. Left
+    out of the batch it would be asked about one paper at a time -- which is the
+    thing the batch exists to stop."""
+    asked = []
+    monkeypatch.setattr(update, "prefetch_s2_by_arxiv",
+                        lambda ids: asked.append(list(ids)) or 0)
+    step3(_ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001"),
+          missing=[{"item_name": "k2", "title": "A Row With No Entry"},
+                   {"item_name": "k3", "title": "A Row Nothing Knows About"}],
+          records={"k2": {"arxiv": "2510.26183"}})
+    assert asked == [["2401.00001", "2510.26183", None]]
 
 
 def test_a_dry_run_does_not_ask_semantic_scholar_either(tmp_path, monkeypatch):

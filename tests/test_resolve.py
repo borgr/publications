@@ -289,6 +289,22 @@ def test_year_guard_does_not_fire_without_a_query_year():
 _TITLE = "A Paper With A Title Long Enough To Search On"
 
 
+def _acl_entry(acl_id, key, title=_TITLE):
+    """What the Anthology actually serves: an entry that names the paper.
+
+    The stubs here used to return `@inproceedings{k, acl=...}` with no title at
+    all, which let these tests pass while saying nothing about whether the entry
+    was the right paper's -- the property the ladder now checks, and the one the
+    Lancet mis-resolution turned on.
+    """
+    return f"@inproceedings{{{key},\n  title = {{{title}}},\n  acl = {{{acl_id}}}\n}}"
+
+
+def _openreview_entry(forum_id, key, title=_TITLE):
+    return (f"@inproceedings{{{key},\n  title = {{{title}}},\n"
+            f"  url = {{https://openreview.net/forum?id={forum_id}}}\n}}")
+
+
 @pytest.fixture
 def ladder(monkeypatch):
     """Every source stubbed to return nothing; a test enables the ones it needs.
@@ -319,7 +335,7 @@ def ladder(monkeypatch):
 def test_an_acl_record_is_preferred_over_openreview_and_openalex(ladder):
     """The Anthology entry is the citation the venue itself publishes."""
     ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
-           fetch_acl_bib=lambda i, k: f"@inproceedings{{{k}, acl={i}}}",
+           fetch_acl_bib=_acl_entry,
            fetch_openreview_bib=lambda i, k: pytest.fail("asked OpenReview anyway"),
            search_openalex=lambda t: pytest.fail("asked OpenAlex anyway"))
     bib, source = resolve(_TITLE, None, "k1", "")
@@ -341,7 +357,7 @@ def test_openreview_is_found_through_s2s_venue_url(ladder):
     ladder(query_s2_by_title=lambda t, y="": {
                "externalIds": {},
                "publicationVenue": {"url": "https://openreview.net/forum?id=AbC123"}},
-           fetch_openreview_bib=lambda i, k: f"@inproceedings{{{k}, forum={i}}}")
+           fetch_openreview_bib=_openreview_entry)
     bib, source = resolve(_TITLE, None, "k1", "")
     assert source == "OpenReview"
     assert "AbC123" in bib
@@ -349,11 +365,88 @@ def test_openreview_is_found_through_s2s_venue_url(ladder):
 
 def test_an_openreview_url_already_in_the_entry_is_used(ladder):
     """No lookup needed: a previous run, or the author, already recorded it."""
-    ladder(fetch_openreview_bib=lambda i, k: f"@inproceedings{{{k}, forum={i}}}")
+    ladder(fetch_openreview_bib=_openreview_entry)
     bib, source = resolve(_TITLE, None, "k1",
                           "url = {https://openreview.net/forum?id=XyZ789}")
     assert source == "OpenReview"
     assert "XyZ789" in bib
+
+
+def test_an_acl_entry_for_a_different_paper_is_not_this_paper(ladder):
+    """The ACL ID comes out of an S2 record, so it is only ever as good as the
+    record it came from -- and for a paper with no arXiv ID of its own, that record
+    came from a title search. The fetch is exact either way; being exact about the
+    wrong ID is the failure mode, so the entry has to be checked, not the lookup.
+    """
+    ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
+           fetch_acl_bib=lambda i, k: _acl_entry(i, k, "Some Entirely Other Paper"),
+           search_openalex=lambda t: None)
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source != "ACL Anthology"
+    assert "2024.acl-1.1" not in (bib or "")
+
+
+def test_an_openreview_entry_for_a_different_paper_is_not_this_paper(ladder):
+    ladder(query_s2_by_title=lambda t, y="": {
+               "externalIds": {},
+               "publicationVenue": {"url": "https://openreview.net/forum?id=AbC123"}},
+           fetch_openreview_bib=lambda i, k: _openreview_entry(i, k, "Another Paper"))
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source != "OpenReview"
+
+
+def test_a_rejected_rung_lets_a_later_one_answer(ladder):
+    """Rejecting an entry is not the same as concluding the paper is unpublished:
+    the ladder has to carry on to the sources that have not answered yet."""
+    ladder(query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
+           fetch_acl_bib=lambda i, k: _acl_entry(i, k, "Some Entirely Other Paper"),
+           search_openalex=lambda t: {"doi": "https://doi.org/10.1/x"},
+           openalex_to_bibtex=lambda w, k: (
+               f"@article{{{k}, title = {{{_TITLE}}}, journal = {{A Real Journal}}}}",
+               True))
+    bib, source = resolve(_TITLE, None, "k1", "")
+    assert source == "OpenAlex"
+
+
+# ── a table row with no bib entry, whose arXiv ID the store already knows ──────
+
+def test_a_remembered_arxiv_id_is_used_instead_of_a_title_search(ladder):
+    """Step 3's Part B resolves table rows that have no entry to read an ID from,
+    so it passes None -- but a previous run may have learned the ID anyway, from
+    DBLP or from S2's crosswalk, and asking by identifier is both exact and
+    cheaper than asking S2 to search."""
+    asked = []
+    ladder(query_s2_by_arxiv=lambda a: asked.append(a) or None,
+           query_s2_by_title=lambda t, y="": pytest.fail(
+               "searched by title with a remembered arXiv id in hand"))
+    store = IdentityStore()
+    store.record("k1", arxiv="2510.26183")
+    resolve(_TITLE, None, "k1", "", store=store)
+    assert asked == ["2510.26183"]
+
+
+def test_the_callers_arxiv_id_wins_over_the_remembered_one(ladder):
+    """The caller's comes from the entry being refreshed, which is this paper by
+    construction. The store's is whatever some earlier run concluded."""
+    asked = []
+    ladder(query_s2_by_arxiv=lambda a: asked.append(a) or None)
+    store = IdentityStore()
+    store.record("k1", arxiv="2510.26183")
+    resolve(_TITLE, "2401.00001", "k1", "", store=store)
+    assert asked == ["2401.00001"]
+
+
+def test_a_remembered_arxiv_id_does_not_become_a_preprint_entry(ladder):
+    """It is used to ask questions, not to answer them. An entry built straight
+    from the ID would be a preprint nothing checked, published into the CV on the
+    authority of an earlier run's guess -- and for these rows there is no existing
+    entry to compare it against, which is why they are in Part B."""
+    ladder(fetch_arxiv_bib=lambda a, k, known_title=None: pytest.fail(
+        f"built an entry from a remembered id: {a}"))
+    store = IdentityStore()
+    store.record("k1", arxiv="2510.26183")
+    bib, source = resolve(_TITLE, None, "k1", "", store=store)
+    assert (bib, source) == ("", "not found")
 
 
 def test_a_source_that_returns_nothing_falls_through_to_the_next(ladder):
@@ -455,7 +548,7 @@ def test_a_silent_dblp_still_lets_the_rest_of_the_ladder_answer(ladder):
     well have the paper, and then there is nothing unknown about it."""
     ladder(search_dblp=_silent_dblp,
            query_s2_by_title=lambda t, y="": {"externalIds": {"ACL": "2024.acl-1.1"}},
-           fetch_acl_bib=lambda i, k: f"@inproceedings{{{k}, acl={i}}}")
+           fetch_acl_bib=_acl_entry)
     bib, source = resolve(_TITLE, None, "k1", "")
     assert source == "ACL Anthology"
 

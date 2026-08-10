@@ -981,6 +981,29 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     # The entry's own year, used to reject a similarly-titled different paper.
     year_m = (re.search(r'\byear\s*=\s*\{?\s*(\d{4})', existing_content)
               or re.search(r'\b(20\d{2})\b', existing_content))
+    query_year = int(year_m.group(1)) if year_m else None
+
+    def _this_paper(bib: str | None) -> bool:
+        """Whether an entry a source produced is a version of this paper.
+
+        Every rung below reaches its entry through an identifier, and an
+        identifier is only as trustworthy as whatever supplied it. S2's title
+        search supplies the ACL and OpenReview IDs for papers with no arXiv ID of
+        their own, and it once supplied a Lancet epidemiology paper's, so this is
+        the last point at which a chain that went wrong anywhere along it can
+        still be stopped.
+        """
+        return bool(bib) and titles_agree(title, _dblp_title(bib),
+                                          query_year, _bib_year(bib))
+
+    # A previous run may know this paper's arXiv ID even when the caller does not:
+    # step 3's Part B resolves table rows that have no bib entry to read one from.
+    # It buys an exact identifier lookup in place of a title search, which is the
+    # rung where a title search went wrong. It is not used for the arXiv fallback
+    # below -- an entry built straight from an unverified ID is one nothing checked.
+    remembered_arxiv = ""
+    if not arxiv_id and store is not None:
+        remembered_arxiv = (store.records.get(original_key) or {}).get("arxiv") or ""
 
     # Step 1 — DBLP title search. `None` is "DBLP did not reply", which is not the
     # same as an empty result list and must not fall through to a preprint as
@@ -988,16 +1011,15 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     dblp_results = search_dblp(title)
     if dblp_results:
         published_bib, corr_bib = pick_published(
-            dblp_results, query_title=title,
-            query_year=int(year_m.group(1)) if year_m else None)
+            dblp_results, query_title=title, query_year=query_year)
         if published_bib:
             _remember(**harvest_ids_from_bibtex(published_bib))
             return _replace_key(published_bib, original_key), "DBLP"
 
     # Step 2 — S2 to get ACL / OpenReview IDs
     s2_data = None
-    if arxiv_id:
-        s2_data = query_s2_by_arxiv(arxiv_id)
+    if arxiv_id or remembered_arxiv:
+        s2_data = query_s2_by_arxiv(arxiv_id or remembered_arxiv)
     else:
         s2_data = query_s2_by_title(title, year_m.group(1) if year_m else "")
 
@@ -1010,7 +1032,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         acl_id = ext.get("ACL")
         if acl_id:
             bib = fetch_acl_bib(acl_id, original_key)
-            if bib:
+            if _this_paper(bib):
                 return bib, "ACL Anthology"
 
         # OpenReview via S2 publicationVenue URL
@@ -1018,14 +1040,14 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         or_id = _extract_openreview_id(pub_venue.get("url", "") or "")
         if or_id:
             bib = fetch_openreview_bib(or_id, original_key)
-            if bib:
+            if _this_paper(bib):
                 return bib, "OpenReview"
 
     # OpenReview URL already in the existing bib entry
     or_id = _extract_openreview_id(existing_content)
     if or_id:
         bib = fetch_openreview_bib(or_id, original_key)
-        if bib:
+        if _this_paper(bib):
             return bib, "OpenReview"
 
     # Step 2b — a DOI we already know about, resolved through clibib. Only ever
@@ -1042,8 +1064,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
     # asking is a wasted request that then gets rejected by the rank guard -- it
     # did so 10 times on a real run.
     if known_doi and not known_doi.lower().startswith("10.48550/"):
-        bib = fetch_by_doi(known_doi, original_key, title,
-                           int(year_m.group(1)) if year_m else None)
+        bib = fetch_by_doi(known_doi, original_key, title, query_year)
         if bib:
             _remember(doi=known_doi)
             return bib, "DOI (clibib)"

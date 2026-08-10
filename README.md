@@ -371,6 +371,31 @@ whole table. Without it the resolver accepted an invited talk by one of a Nature
 paper's twenty co-authors as that paper's published version, on a title similarity
 of 0.86, and the CV printed it.
 
+### An answer is not a match
+
+Every source in the ladder answers a question it was asked, and two of them will
+answer it with something else if they have nothing: DBLP and Semantic Scholar both
+run *relevance* searches, ranked, always non-empty. So an entry is only accepted
+when it is a version of the paper that was asked for —
+`resolve_arxiv.titles_agree`: normalized title similarity of at least 0.72, and
+short of 0.95 the year has to agree too, since difflib rewards a long common
+subsequence however much extra text there is.
+
+Resolving by identifier is exact, which is not the same as being right — the
+*identifier* can be wrong, and then what comes back is a real, well-formed,
+verifiable entry for somebody else's paper. So the DOI, ACL Anthology and
+OpenReview rungs check their entry as well, not just their lookup. Every one of
+those identifiers arrives from somewhere: `externalIds` on an S2 record, a store
+record an earlier run wrote, a URL in the existing entry.
+
+That is one rule in one function, applied at every point where an entry is
+produced, because it took only one unguarded rung to publish the wrong paper: an
+unchecked S2 title search answered "Every eval ever: Toward a common language for
+AI eval reporting" with a Lancet epidemiology paper, its DOI became that paper's
+known DOI, clibib resolved it exactly, and the CV listed "Global burden of 292
+causes of death in 204 countries and territories". Nothing raised. The two titles
+score 0.22; a genuinely retitled paper scores 0.77 and passes on its year.
+
 ## Pruning orig.bib
 
 `orig.bib` accumulates: a paper's arXiv entry stays behind when step 3 moves its row
@@ -412,6 +437,10 @@ Deliberately never used for title search: measured against this repo's own
 unresolved papers, its free-text lookup returned a confidently wrong paper 2 times
 in 5 with no error raised. Its identifier paths are exact and fast, and its own
 README recommends preferring them.
+
+What comes back is still checked against the title that was asked for, because an
+exact lookup of a wrong DOI returns a wrong paper just as confidently — see *An
+answer is not a match* above.
 
 As a manual helper it is genuinely useful for worklist items where you have an
 identifier:
