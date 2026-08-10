@@ -15,7 +15,9 @@ cheap and safe:
   7. Commit and push to GitHub and Overleaf, rebasing if a remote has moved
 
 Exits non-zero if anything failed, and notifies, so an unattended run cannot
-fail silently while the CV keeps looking current.
+fail silently while the CV keeps looking current. A failed Scholar fetch does not
+stop the rest: steps 2-7 run on the citations.csv already on disk, so the only
+thing a CAPTCHA costs is a week of citation counts.
 
 Usage:
     python update.py [--dry-run] [--force] [--no-push] [--no-notify]
@@ -75,6 +77,7 @@ from table_io import (
 from venues import Venues
 
 CITATIONS_CSV = os.path.join(FILE_DIR, "citations.csv")
+CONFIG_PATH   = os.path.join(FILE_DIR, "config.py")
 TABLE_PATH    = CSV_PATH
 BIB_PATH      = os.path.join(FILE_DIR, "orig.bib")
 STATS_PATH    = os.path.join(FILE_DIR, "profile_stats.json")
@@ -92,15 +95,19 @@ TEX_PATH      = os.path.join(OVERLEAF_DIR, "main.tex")
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 # Each step's inputs. A step re-runs when any of its inputs' *contents* differ
-# from the last successful run. Three of these entries fix real skip bugs: step 4
+# from the last successful run. Four of these entries fix real skip bugs: step 4
 # ignored citations.csv, so refreshed counts never reached the bibliography; step
-# 5 ignored profile_stats.json, so a new h-index never reached the CV; and step 3
+# 5 ignored profile_stats.json, so a new h-index never reached the CV; step 3
 # ignored orig.bib, which it both reads and writes, so a preprint entry added or
-# corrected by hand was never looked up until something else happened to change.
+# corrected by hand was never looked up until something else happened to change;
+# and step 5 ignored config.py, which is where the name it writes into main.tex
+# and bolds in the bibliography comes from -- so changing AUTHOR_NAME did nothing
+# until some paper happened to resolve, which for a fork adopting this pipeline is
+# the difference between a CV with their name on it and a CV with mine.
 STEP_INPUTS = {
     "resolve":      [BIB_PATH, TABLE_PATH, CITATIONS_CSV],
     "build_bib":    [BIB_PATH, TABLE_PATH, CITATIONS_CSV, VENUES_PATH],
-    "rebuild_tex":  [WZMN_BIB, STATS_PATH],
+    "rebuild_tex":  [WZMN_BIB, STATS_PATH, CONFIG_PATH],
 }
 
 # What each step produces. Also checked before skipping, because a step whose
@@ -718,7 +725,7 @@ Companion commands, none needed routinely:
     parser.add_argument("--skip-resolve",      action="store_true", help="Skip step 3")
     parser.add_argument("--skip-publications", action="store_true", help="Skip step 4")
     parser.add_argument("--skip-tex",          action="store_true", help="Skip step 5")
-    parser.add_argument("--no-push",           action="store_true", help="Skip step 6 (commit + push)")
+    parser.add_argument("--no-push",           action="store_true", help="Skip step 7 (commit + push)")
     parser.add_argument("--no-notify",         action="store_true",
                         help="Do not post a desktop/CI notification on failure")
     parser.add_argument("--user", default=None,
@@ -746,8 +753,11 @@ Companion commands, none needed routinely:
     if not args.skip_resolve:
         print(f"{describe_s2_key()}\n")
 
-    n_added = 0
-    n_upgraded = n_appended = n_still_arxiv = 0
+    # None rather than 0 for "this step did not run". A skipped step has no
+    # results, and printing zeros for it says something false about the data:
+    # "0 still arXiv" is what a fully resolved bibliography looks like.
+    n_added = None
+    n_upgraded = n_appended = n_still_arxiv = None
     not_found: list = []
     cats = None
     state = PipelineState.load()
@@ -775,6 +785,7 @@ Companion commands, none needed routinely:
 
     # Step 1 — re-fetch when the recorded fetch has aged out. Time-based rather
     # than content-based: the whole point is to notice that the *remote* changed.
+    fetch_problem = None
     fetch_age = state.age_hours("fetch")
     print("[Step 1] Fetching Scholar profile")
     if args.skip_fetch:
@@ -783,10 +794,34 @@ Companion commands, none needed routinely:
         print(f"  Auto-skipped — last fetch was {fetch_age:.1f}h ago "
               f"(threshold: {args.fetch_age}h, use --force to override).")
     else:
-        step1_fetch(args.dry_run, args.user)
-        if not args.dry_run:
-            state.mark_done("fetch", [CITATIONS_CSV])
-            state.save()
+        try:
+            step1_fetch(args.dry_run, args.user)
+        except Exception as exc:
+            # A failed fetch used to end the run, taking steps 2-7 with it. It is
+            # the likeliest failure in the whole pipeline and the one that costs
+            # the least to work around: Scholar answers with a CAPTCHA when it
+            # feels crawled, and fetch_citations.py deliberately refuses to write
+            # a short scrape over a good citations.csv. Both are recoverable, and
+            # neither says anything about the papers already on disk -- so the
+            # rest of the run proceeds on them, which is exactly what --skip-fetch
+            # asks for on purpose. What is lost is one week of citation counts;
+            # what was lost before is a newly published paper staying cited as a
+            # preprint because step 3 never ran.
+            #
+            # Not recorded as done, so the age check re-fetches on the next run,
+            # and reported at the end so the run still exits non-zero.
+            if not os.path.exists(CITATIONS_CSV):
+                raise   # Nothing on disk to fall back to; there is no run to save.
+            fetch_problem = f"{type(exc).__name__}: {exc}"
+            print(f"\n  Fetch failed: {fetch_problem}")
+            print("  Continuing on the citations.csv already on disk. Citation "
+                  "counts will be as of the last successful fetch; everything "
+                  "else in this run is current.")
+            sys.stdout.flush()
+        else:
+            if not args.dry_run:
+                state.mark_done("fetch", [CITATIONS_CSV])
+                state.save()
 
     # Step 2 — cheap and idempotent, so it always runs unless explicitly skipped.
     if args.skip_new:
@@ -843,10 +878,18 @@ Companion commands, none needed routinely:
         push_ok = step7_push(args.dry_run)
 
     print("\n" + "═" * 52)
-    print(f"  Step 2: {n_added} new paper(s) added to the publications table")
-    print(f"  Step 3: {n_upgraded} arXiv → published  |  "
-          f"{n_appended} new entries appended  |  "
-          f"{n_still_arxiv} still arXiv")
+    if fetch_problem:
+        print(f"  Step 1: FAILED ({fetch_problem}) — citation counts are stale")
+    if n_added is None:
+        print("  Step 2: did not run")
+    else:
+        print(f"  Step 2: {n_added} new paper(s) added to the publications table")
+    if n_upgraded is None:
+        print("  Step 3: did not run")
+    else:
+        print(f"  Step 3: {n_upgraded} arXiv → published  |  "
+              f"{n_appended} new entries appended  |  "
+              f"{n_still_arxiv} still arXiv")
     if not_found:
         print(f"\n  {len(not_found)} paper(s) need a manual bib lookup "
               f"(also listed in WORKLIST.md):")
@@ -857,14 +900,28 @@ Companion commands, none needed routinely:
     # A silent failure in an unattended run is the failure mode that matters:
     # the CV keeps looking current while going stale. Exit non-zero so launchd,
     # cron or Actions notices, and notify on the way out.
+    #
+    # Collected and reported here rather than raised where they happened. A step
+    # the rest of the run can work around must not cost the steps that would have
+    # succeeded -- and must not be able to exit 0 either, which is the only reason
+    # working around it is safe.
+    failures = []
+    if fetch_problem:
+        failures.append((
+            "Publications pipeline could not read Google Scholar.",
+            f"{fetch_problem} The rest of the run used the citations.csv already "
+            f"on disk, so the CV is correct except for citation counts, which are "
+            f"as of the last successful fetch. Re-run `python update.py --force` "
+            f"from a different network if Scholar is serving a CAPTCHA."))
     if not push_ok:
-        notify.failure(
+        failures.append((
             "Publications pipeline could not push.",
             "Generated files are correct on disk but GitHub and/or Overleaf are "
             "not updated. Re-run `python update.py --skip-fetch` after fixing the "
-            "remote.",
-            enabled=not args.no_notify,
-        )
+            "remote."))
+    for summary, detail in failures:
+        notify.failure(summary, detail, enabled=not args.no_notify)
+    if failures:
         sys.exit(1)
 
 

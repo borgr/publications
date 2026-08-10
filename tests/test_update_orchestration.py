@@ -219,6 +219,22 @@ def test_a_step_recorded_before_outputs_were_tracked_runs_once(h):
     assert h.state().steps["resolve"]["outputs"], "outputs still not recorded"
 
 
+def test_renaming_the_author_rebuilds_the_cv(h):
+    """Step 5 is where config.AUTHOR_NAME reaches the CV: it writes the name line
+    in main.tex and points the bibliography styles' bolding at it. Nothing else
+    reads that value, so a rebuild this step skips is a rename that did not
+    happen -- and for somebody forking this pipeline, the name on the CV they
+    compile is still mine until a paper happens to resolve."""
+    h.completed("rebuild_tex")
+    config_input = [p for p in h.inputs["rebuild_tex"]
+                    if os.path.basename(p) == "config.py"]
+    assert config_input, "config.py is not an input to step 5"
+    with open(config_input[0], "w") as f:
+        f.write('AUTHOR_NAME = "Someone Else"\n')
+    update.main(["--no-notify"])
+    assert h.ran("step5_rebuild_tex")
+
+
 @pytest.mark.parametrize("flag, step", [
     ("--skip-fetch",        "step1_fetch"),
     ("--skip-new",          "step2_add_new_papers"),
@@ -359,6 +375,60 @@ def test_no_key_notice_when_the_resolve_step_is_skipped(h, monkeypatch, capsys):
     monkeypatch.setattr(resolve_arxiv, "s2_api_key_source", lambda: ("", ""))
     update.main(["--skip-resolve", "--no-notify"])
     assert "API key" not in capsys.readouterr().out
+
+
+# ── a fetch that failed is not a run that failed ─────────────────────────────
+#
+# Scholar is the one source in this pipeline that answers with a CAPTCHA when it
+# feels crawled -- it is why CI does not fetch at all -- and fetch_citations.py
+# deliberately refuses to overwrite a good citations.csv with a short scrape. Both
+# used to end the run at step 1, so the week's resolving, rebuilding and pushing
+# were lost to a problem that says nothing about the papers already on disk.
+
+@pytest.fixture
+def broken_fetch(h, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("Scholar returned a CAPTCHA / unusual-traffic page")
+    monkeypatch.setattr(update, "step1_fetch", boom)
+    return h
+
+
+def test_a_failed_fetch_still_runs_the_rest_of_the_pipeline(broken_fetch):
+    with pytest.raises(SystemExit):
+        update.main(["--no-notify"])
+    assert broken_fetch.ran("step3_resolve"), "a CAPTCHA cost the week's resolving"
+    assert broken_fetch.ran("step5_rebuild_tex")
+    assert broken_fetch.ran("step7_push"), "a CAPTCHA cost the week's publishing"
+
+
+def test_a_failed_fetch_exits_nonzero(broken_fetch):
+    """Working around it is only safe because the run still reports it."""
+    with pytest.raises(SystemExit) as exc:
+        update.main(["--no-notify"])
+    assert exc.value.code == 1
+
+
+def test_a_failed_fetch_notifies(broken_fetch):
+    with pytest.raises(SystemExit):
+        update.main([])
+    assert broken_fetch.notified, "a failed fetch produced no notification"
+
+
+def test_a_failed_fetch_is_not_recorded_as_done(broken_fetch):
+    """Step 1 is age-based, so recording it would wait out --fetch-age before
+    trying again -- a day of not asking, for a CAPTCHA that clears in minutes."""
+    with pytest.raises(SystemExit):
+        update.main(["--no-notify"])
+    assert "fetch" not in broken_fetch.state().steps
+
+
+def test_a_failed_fetch_with_nothing_on_disk_is_fatal(broken_fetch):
+    """There is no previous scrape to fall back on, so there is no run to save:
+    every later step would work from an empty table and publish an empty CV."""
+    os.unlink(update.CITATIONS_CSV)
+    with pytest.raises(RuntimeError):
+        update.main(["--no-notify"])
+    assert not broken_fetch.ran("step3_resolve")
 
 
 def test_a_step_that_raises_leaves_the_step_unrecorded(h, monkeypatch):

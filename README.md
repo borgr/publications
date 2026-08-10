@@ -44,6 +44,14 @@ rebuilds it, instead of skipping forever because no input changed.
 A run where a source never replied does not record its step as done, so the next
 run asks again rather than freezing a lookup that failed for network reasons.
 
+A failed Scholar fetch does not stop the run. Scholar answers with a CAPTCHA when
+it feels crawled, and step 1 refuses to write a short scrape over a good
+`citations.csv` — both are temporary, and neither says anything about the papers
+already on disk. So steps 2–7 carry on from what is there, which is exactly what
+`--skip-fetch` asks for on purpose, and the run still notifies and exits non-zero.
+The cost is one week of citation counts; the cost of stopping was a paper
+published last week staying cited as a preprint because step 3 never ran.
+
 | # | Step | What it does |
 |---|------|--------------|
 | 1 | fetch | Scrapes the Scholar profile → `citations.csv`, `profile_stats.json`. Time-based (`--fetch-age`, default 24h). |
@@ -105,6 +113,10 @@ CONTACT_EMAIL = ""           # optional, for OpenAlex's polite pool
 ```
 
 `curl` and `git` must be on your PATH.
+
+Editing `AUTHOR_NAME` is enough on its own: `config.py` is one of step 5's inputs,
+so the next run rewrites the name line in `main.tex` and repoints the bibliography
+styles' name-bolding at you, even if nothing else about the data changed.
 
 ### A Semantic Scholar API key is worth the two minutes
 
