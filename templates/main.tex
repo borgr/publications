@@ -17,20 +17,28 @@
 %
 % Run: python update.py   (from the publications/ directory)
 %
+% HOW OLD ARE THE NUMBERS
+% -----------------------
+% Step 1 runs from a weekly job on your own machine, not from CI: Google
+% Scholar answers a datacenter address with a CAPTCHA rather than with data,
+% so a hosted runner cannot fetch it. The counts are therefore as of the date
+% in the comment beside them — which is not \today, and drifts once the
+% machine is off for a while.
+%
 % WHAT TO UPDATE MANUALLY
 % -----------------------
 % 1. Author name and Scholar ID: edit config.py (single source of truth).
 %    The pipeline rewrites the BST files and this document's header
 %    automatically on each run.
 %
-% 3. papers.csv: the source of truth for paper metadata
+% 2. papers.csv: the source of truth for paper metadata
 %    (venue, authors, year, bib key, category flags).  Add new papers
 %    there; the pipeline will pick them up on the next run.
 %
-% 4. The \section*{Contributions note} text below explains the ST/PI
+% 3. The \section*{Contributions note} text below explains the ST/PI
 %    superscript convention — edit it to match your own conventions.
 %
-% 5. Chapter structure: each \chapter*{} block ends with \putbib.
+% 4. Chapter structure: each \chapter*{} block ends with \putbib.
 %    The \nocite{} lines are auto-regenerated; do not edit them by hand.
 %
 % FLAGS / OPTIONS

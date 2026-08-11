@@ -6,6 +6,7 @@ line was enough to freeze a CV section with a stale paper list permanently, whil
 the run reported success and pushed.
 """
 
+import json
 import os
 import re
 import sys
@@ -441,6 +442,61 @@ def test_unchanged_stats_say_so(stats, capsys):
     once, _ = update_tex(TEX, CATS)
     update_tex(once, CATS)
     assert "already current" in capsys.readouterr().out
+
+
+# ── dating the numbers in the file that prints them ──────────────────────────
+
+def _dated_stats(tmp_path, monkeypatch, fetched="2026-08-10"):
+    path = tmp_path / "profile_stats.json"
+    path.write_text(json.dumps({"citations": 6286, "h_index": 39,
+                                "fetched": fetched}), encoding="utf-8")
+    monkeypatch.setattr(rebuild_tex, "STATS_PATH", str(path))
+    monkeypatch.setattr(rebuild_tex.config, "AUTHOR_NAME", "Leshem Choshen")
+
+
+def test_the_fetch_date_is_written_beside_the_numbers(tmp_path, monkeypatch):
+    """`\\noindent\\today` is two lines above these numbers, so a recompile in
+    December prints December's date over August's counts. The comment is the only
+    thing in the project that says when they were measured."""
+    _dated_stats(tmp_path, monkeypatch)
+    out, problems = update_tex(TEX, CATS)
+    assert problems == []
+    # Directly under the block, not somewhere else in a 700-line file.
+    assert "h-index\t39\n}\n% Citation counts as of 2026-08-10" in out
+
+
+def test_a_second_run_replaces_the_date_rather_than_stacking_another(
+        tmp_path, monkeypatch):
+    """Left to accumulate, the file grows a line a week and the oldest date is
+    the one nearest the numbers."""
+    _dated_stats(tmp_path, monkeypatch, "2026-08-10")
+    once, _ = update_tex(TEX, CATS)
+    _dated_stats(tmp_path, monkeypatch, "2026-09-14")
+    twice, _ = update_tex(once, CATS)
+    assert twice.count("% Citation counts as of") == 1
+    assert "2026-09-14" in twice and "2026-08-10" not in twice
+
+
+def test_rewriting_with_the_same_date_changes_nothing(tmp_path, monkeypatch):
+    """Step 7 commits whatever differs, so a file that changes on every run would
+    push a commit to Overleaf every Monday whether or not anything happened."""
+    _dated_stats(tmp_path, monkeypatch)
+    once, _ = update_tex(TEX, CATS)
+    twice, _ = update_tex(once, CATS)
+    assert twice == once
+
+
+def test_undated_stats_leave_no_note_and_remove_a_stale_one(tmp_path, monkeypatch):
+    """A fork's zeroed stats have no date. Keeping the previous run's line would
+    date this run's numbers with someone else's fetch."""
+    _dated_stats(tmp_path, monkeypatch, "2026-08-10")
+    dated, _ = update_tex(TEX, CATS)
+    path = tmp_path / "profile_stats.json"
+    path.write_text('{"citations": 0, "h_index": 0}', encoding="utf-8")
+    out, problems = update_tex(dated, CATS)
+    assert problems == []
+    assert "% Citation counts as of" not in out
+    assert "Citations\t0" in out
 
 
 # ── the missing submodule, which is a fork's first experience of this repo ────

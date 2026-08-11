@@ -212,6 +212,44 @@ gets a CAPTCHA, not data:
   Monday at 14:47 UTC — deliberately *after* the local run, since checking first
   would compare against data an hour from being replaced.
 
+### How old the citation numbers are
+
+Nobody has to run anything: the weekly job is unattended, and a Mac asleep at
+08:37 runs it on waking (launchd coalesces the intervals it missed, unlike cron,
+which drops them). What it does depend on is *that* machine — a laptop switched
+off for a month fetches nothing for a month, and CI cannot cover for it, because
+the CAPTCHA is a response to the address the request comes from rather than to
+anything the pipeline does.
+
+So the numbers carry their date. `profile_stats.json` records the day it was
+fetched, and step 5 writes that date into a comment beside the
+Citations/h-index block in `main.tex` — where it matters, since `\noindent\today`
+sits two lines above those numbers and a recompile in December would otherwise
+print December over August's counts. The date is *recorded* rather than read off
+the file's modification time because git does not carry mtimes: in CI, and in
+every fork, every file was modified at checkout, so an mtime says only when the
+clone happened.
+
+Past `STALE_AFTER_DAYS` (60, in `citations_io.py`), `WORKLIST.md` grows a section
+saying so and `python scripts/worklist.py --check` exits non-zero. Sixty days
+rather than thirty because a few missed Mondays are a holiday, whereas two months
+means the job itself has stopped — `launchctl list com.publications.update` says
+which.
+
+A bi-monthly cadence is genuinely fine for what this CV shows. The counts appear
+in exactly two places — the totals block, which moves by a fraction of a percent
+a week, and the optional per-entry `[N cited]` (off by default) — and nothing
+else is ranked or filtered by them; entries are ordered by year. A *new* paper
+does wait for the fetch, since step 2 finds it in `citations.csv`; a paper that
+has since been published does not, because step 3 upgrades it from arXiv, DBLP,
+Semantic Scholar and OpenAlex, none of which need the local machine.
+
+Fetching the counts in CI from Semantic Scholar or OpenAlex would need no
+machine and no CAPTCHA, and is deliberately not done: those corpora are not
+Scholar's, so the totals would disagree with the Scholar profile the CV links to,
+and the h-index would have to be recomputed rather than read. That is a change to
+what the CV claims, not a scheduling improvement.
+
 ### Letting the local run push to Overleaf
 
 Step 7 pushes with plain `git push`, so git has to be able to authenticate on its

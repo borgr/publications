@@ -13,6 +13,8 @@ reads the author's real data.
 import json
 import os
 import sys
+import time
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -22,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import build_bib
 import citations_io
 from bib_utils import parse_bibtex
+from citations_io import STALE_AFTER_DAYS
 from identity import IdentityStore
 
 # The flag columns _process_entries reads, plus the tag columns it turns into
@@ -391,22 +394,54 @@ def test_a_missing_citations_file_is_a_warning_not_a_crash(tmp_path, capsys):
     assert "not found" in capsys.readouterr().out
 
 
+def _dated(tmp_path, days_ago):
+    """A citations.csv beside a profile_stats.json fetched `days_ago` days ago."""
+    (tmp_path / "citations.csv").write_text("title,citations\nPaper One,3\n")
+    fetched = (date.today() - timedelta(days=days_ago)).isoformat()
+    (tmp_path / "profile_stats.json").write_text(
+        json.dumps({"citations": 3, "h_index": 1, "fetched": fetched}))
+    return str(tmp_path / "citations.csv"), fetched
+
+
 def test_a_stale_citations_file_is_flagged(tmp_path, capsys):
-    path = tmp_path / "citations.csv"
-    path.write_text("title,citations\nPaper One,3\n")
-    old = 60 * 60 * 24 * 60      # 60 days
-    stat = os.stat(path)
-    os.utime(path, (stat.st_atime - old, stat.st_mtime - old))
-    build_bib.load_citations(str(path))
-    assert "days old" in capsys.readouterr().out
+    path, fetched = _dated(tmp_path, STALE_AFTER_DAYS + 5)
+    build_bib.load_citations(path)
+    out = capsys.readouterr().out
+    assert "days ago" in out
+    assert fetched in out, "the date is the actionable part: it says how far behind"
+
+
+def test_the_age_is_the_recorded_fetch_not_the_file_s_mtime(tmp_path, capsys):
+    """The mtime this used to read is reset by `git clone`.
+
+    So in CI, and in every fork, and in any fresh clone of the author's own repo,
+    the file was modified at checkout -- and the warning could not fire however old
+    the data actually was. Here the file is written now and the fetch was long ago,
+    which is exactly that situation and must still warn.
+    """
+    path, _ = _dated(tmp_path, STALE_AFTER_DAYS + 400)
+    assert time.time() - os.path.getmtime(path) < 60, "the file itself is new"
+    build_bib.load_citations(path)
+    assert "days ago" in capsys.readouterr().out
 
 
 def test_a_fresh_citations_file_is_read_without_comment(tmp_path, capsys):
-    path = tmp_path / "citations.csv"
-    path.write_text("title,citations\nPaper One,3\n")
-    rows = build_bib.load_citations(str(path))
+    path, _ = _dated(tmp_path, 3)
+    rows = build_bib.load_citations(path)
     assert len(rows) == 1
-    assert "days old" not in capsys.readouterr().out
+    assert "days ago" not in capsys.readouterr().out
+
+
+def test_an_undated_citations_file_is_not_called_stale(tmp_path, capsys):
+    """A fork that has never fetched has zeroed stats and no date.
+
+    Warning there would be a guess, and the first thing a stranger sees. Nothing
+    is claimed about counts whose age is unknown.
+    """
+    (tmp_path / "citations.csv").write_text("title,citations\nPaper One,3\n")
+    (tmp_path / "profile_stats.json").write_text('{"citations": 0, "h_index": 0}')
+    build_bib.load_citations(str(tmp_path / "citations.csv"))
+    assert "days ago" not in capsys.readouterr().out
 
 
 # --- main(), start to finish --------------------------------------------

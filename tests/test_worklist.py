@@ -11,8 +11,10 @@ as needing a decision, and which findings are noise that would make `--check`
 permanently red and therefore ignored.
 """
 
+import json
 import os
 import sys
+from datetime import date, timedelta
 
 import pandas as pd
 import pytest
@@ -63,6 +65,10 @@ def wl(tmp_path, monkeypatch):
     # A path that does not exist, so the unpublished-output check is a no-op
     # unless a test asks for it.
     monkeypatch.setattr(worklist, "OVERLEAF_DIR", str(tmp_path / "no-overleaf"))
+    # Where the fetch date is read from. Left alone, the staleness section would
+    # report on the author's own profile_stats.json -- passing today and failing
+    # whenever he next goes two months without a fetch.
+    monkeypatch.setattr(worklist, "ROOT", str(tmp_path))
 
     monkeypatch.setattr(worklist, "read_df", lambda: table())
     monkeypatch.setattr(worklist, "get_missing_bib_entries", lambda *a, **k: [])
@@ -92,6 +98,54 @@ def test_a_clean_pipeline_produces_no_sections(wl):
 
 def test_nothing_open_renders_as_done(wl):
     assert "Nothing open" in worklist.render([], Join())
+
+
+# --- how old the numbers are --------------------------------------------
+# The weekly fetch runs on one particular Mac, so it stops without anything
+# failing: no error, no red CI, just numbers that quietly stay put. This section
+# is the only thing that notices.
+
+def _fetched(wl, days_ago):
+    (wl / "profile_stats.json").write_text(json.dumps(
+        {"citations": 10, "h_index": 2,
+         "fetched": (date.today() - timedelta(days=days_ago)).isoformat()}))
+
+
+def test_counts_older_than_the_threshold_are_reported(wl):
+    _fetched(wl, worklist.STALE_AFTER_DAYS + 3)
+    section = only(worklist.gather()[0])
+    assert "days old" in section.title
+    assert "update.py" in section.blurb, "a report with no way to act on it"
+
+
+def test_the_report_says_when_rather_than_only_that_it_is_old(wl):
+    """"Stale" is not actionable; a date is. It also says whether the job stopped
+    two months ago or two years ago, which decides what to look at."""
+    _fetched(wl, worklist.STALE_AFTER_DAYS + 3)
+    body = "\n".join(only(worklist.gather()[0]).lines)
+    assert (date.today() - timedelta(days=worklist.STALE_AFTER_DAYS + 3)).isoformat() \
+        in body
+
+
+def test_counts_inside_the_threshold_are_not_reported(wl):
+    """A few missed Mondays are a holiday. Reporting them trains the author to
+    scroll past the section that matters."""
+    _fetched(wl, worklist.STALE_AFTER_DAYS - 1)
+    assert worklist.gather()[0] == []
+
+
+def test_counts_of_unknown_age_are_not_reported(wl):
+    """A fork has zeroed stats and no fetch date, and would otherwise open its
+    first worklist with a complaint about data it has never had."""
+    (wl / "profile_stats.json").write_text('{"citations": 0, "h_index": 0}')
+    assert worklist.gather()[0] == []
+
+
+def test_check_fails_on_stale_counts(wl):
+    """Nobody has to decide anything, but nothing clears it either until the
+    pipeline runs -- which is the definition of an open item here."""
+    _fetched(wl, worklist.STALE_AFTER_DAYS + 3)
+    assert worklist.main(["--check"]) == 1
 
 
 # --- duplicates ---------------------------------------------------------
@@ -304,16 +358,19 @@ def test_conflicting_identifiers_are_reported(wl, monkeypatch):
 
 # --- rendering ----------------------------------------------------------
 
-def test_the_summary_counts_only_the_sections_needing_a_decision():
+def test_the_summary_counts_only_the_sections_needing_something():
     sections = [
         worklist.Section("Needs you", "b", ["- x"], nature=worklist.ONE_OFF),
         worklist.Section("Recurs", "b", ["- x"], nature=worklist.RECURRING),
+        # Needs an action rather than a decision -- a run -- and counts for the
+        # same reason: nothing else clears it.
+        worklist.Section("Old", "b", ["- x"], nature=worklist.STALE),
         worklist.Section("Self", "b", ["- x"], nature=worklist.SELF_RESOLVING),
         worklist.Section("FYI", "b", ["- x"], nature=worklist.INFORMATIONAL),
         worklist.Section("External", "b", ["- x"], nature=worklist.EXTERNAL),
     ]
     text = worklist.render(sections, Join(matched={"a": 1}, method={"a": MATCH_EXACT_ID}))
-    assert "**2 of 5 sections need a decision from you**" in text
+    assert "**3 of 6 sections need something from you**" in text
 
 
 def test_every_section_renders_its_nature_and_its_lines():

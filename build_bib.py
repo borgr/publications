@@ -1,6 +1,5 @@
 import os
 import re
-from datetime import datetime
 from typing import NamedTuple
 
 import pandas as pd
@@ -14,7 +13,12 @@ from bib_utils import (
     publication_rank,
     read_df,
 )
-from citations_io import read_citation_rows
+from citations_io import (
+    STALE_AFTER_DAYS,
+    days_since_fetch,
+    fetched_date,
+    read_citation_rows,
+)
 from identity import (
     IdentityStore,
     duplicate_groups_by_identifier,
@@ -163,14 +167,21 @@ def venue_resolution(name):
 
 
 def load_citations(citations_path):
-    """Read citations.csv into row dicts, warning if the data has gone stale."""
+    """Read citations.csv into row dicts, warning if the data has gone stale.
+
+    Age comes from the recorded fetch date, not from the file's mtime: mtime is
+    when this clone last wrote the file, which in CI and in a fork is the
+    checkout, so the warning could never fire in either. It also could not fire
+    after any `git clone` on the author's own machine.
+    """
     if not os.path.exists(citations_path):
         print(f"Warning: {citations_path} not found. Proceeding with empty citations.")
         return []
-    mtime = datetime.fromtimestamp(os.path.getmtime(citations_path))
-    age_days = (datetime.now() - mtime).days
-    if age_days > 30:
-        print(f"Warning: {citations_path} is {age_days} days old. Consider running update.py.")
+    root = os.path.dirname(citations_path) or "."
+    stale = days_since_fetch(root)
+    if stale is not None and stale > STALE_AFTER_DAYS:
+        print(f"Warning: citation counts are from {fetched_date(root)}, {stale} "
+              f"days ago. Run update.py on a machine Scholar answers.")
     return read_citation_rows(citations_path)
 
 

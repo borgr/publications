@@ -1,4 +1,4 @@
-"""Read and write citations.csv.
+"""Read and write citations.csv, and read the date the fetch behind it ran.
 
 Format
 ------
@@ -22,9 +22,55 @@ can be deleted.
 """
 
 import csv
+import json
 import os
+from datetime import date
 
 HEADER = ["Title", "Cited by", "Year", "Authors", "Venue", "Scholar ID"]
+
+# Written beside citations.csv by the same fetch, and carrying its date.
+STATS_FILE = "profile_stats.json"
+FETCHED_KEY = "fetched"
+
+# How long the counts may sit before anything says so. Two months rather than
+# one: the fetch runs weekly when the author's Mac is awake on a Monday, so a
+# gap of a few weeks is an ordinary holiday and not worth a warning, while two
+# months means the schedule itself has stopped working.
+STALE_AFTER_DAYS = 60
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def fetched_date(root=None):
+    """The date of the Scholar fetch behind the counts, or "" if unknown.
+
+    Read from `profile_stats.json` rather than from a file mtime, because git
+    does not carry mtimes: every file in a fresh clone was modified seconds ago,
+    so CI and every fork see counts of any age as brand new. Recording the date
+    as data makes it survive the clone, and makes it printable -- "as of
+    2026-08-10" is checkable in a way that "recent" is not.
+
+    Unknown is a real state, not an error: a fork that has never fetched has
+    zeroed stats, and nothing should be claimed about them.
+    """
+    try:
+        with open(os.path.join(root or ROOT, STATS_FILE), encoding="utf-8") as f:
+            fetched = json.load(f).get(FETCHED_KEY) or ""
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return str(fetched)
+
+
+def days_since_fetch(root=None):
+    """Whole days since the counts were fetched, or None if that is unknown."""
+    fetched = fetched_date(root)
+    if not fetched:
+        return None
+    try:
+        then = date.fromisoformat(fetched)
+    except ValueError:
+        return None
+    return max(0, (date.today() - then).days)
 
 _FIELDS = {
     "Title": "title",

@@ -16,9 +16,10 @@ sys.path.insert(0, FILE_DIR)
 import build_bib
 import config
 from build_bib import BibCategories
+from citations_io import FETCHED_KEY, STATS_FILE
 
 TEX_PATH      = os.path.join(FILE_DIR, "overleaf", "main.tex")
-STATS_PATH    = os.path.join(FILE_DIR, "profile_stats.json")
+STATS_PATH    = os.path.join(FILE_DIR, STATS_FILE)
 OVERLEAF_DIR  = os.path.join(FILE_DIR, "overleaf")
 _BST_FILES    = ["planyr-rev.bst", "planyr.bst", "iclr-based.bst"]
 
@@ -93,6 +94,11 @@ def _replace_nocite_after_comment(tex, comment_text, new_keys):
 
 _STATS_RE   = re.compile(r'\\textbf\{Citations\t(\d+)\nh-index\t(\d+)\n\}')
 _AUTHOR_LINE_RE = re.compile(r'(\\noindent\\today\n\n?)([^\n]+)(\n\\textbf\{Citations)', re.MULTILINE)
+
+# The as-of line, matched on its own prefix so that a run replaces the previous
+# one instead of stacking another underneath it.
+_ASOF_PREFIX = "% Citation counts as of "
+_ASOF_RE = re.compile(rf'^{re.escape(_ASOF_PREFIX)}.*\n', re.MULTILINE)
 
 
 def patch_bst_author(author_name: str | None = None) -> list:
@@ -214,7 +220,14 @@ def _update_author_name_in_tex(tex: str):
 
 
 def _update_profile_stats(tex: str):
-    """Set the Citations/h-index numbers from profile_stats.json."""
+    """Set the Citations/h-index numbers from profile_stats.json, and date them.
+
+    The date goes in as a LaTeX comment rather than into the CV's text, so the
+    compiled PDF is unchanged and only someone editing the project sees it. It is
+    worth their seeing: `\\noindent\\today` sits two lines above these numbers, so
+    a recompile in December prints December's date above August's citation count,
+    and nothing else in the project says otherwise.
+    """
     if not os.path.exists(STATS_PATH):
         # Genuinely optional: no stats fetched yet, nothing to write.
         return tex, None
@@ -237,7 +250,26 @@ def _update_profile_stats(tex: str):
         lambda _m: f'\\textbf{{Citations\t{citations}\nh-index\t{h_index}\n}}', tex)
     if new_tex == tex:
         print(f"  Citations/h-index already current ({citations}, {h_index})")
-    return new_tex, None
+    return _date_the_stats(new_tex, stats.get(FETCHED_KEY)), None
+
+
+def _date_the_stats(tex: str, fetched):
+    """Put the fetch date in a comment under the numbers, replacing any older one.
+
+    Nothing is written when the date is unknown -- a fork that has never fetched
+    has zeroed stats -- and any line left by a previous run is removed either way,
+    so a stale date is never the thing that survives.
+    """
+    tex = _ASOF_RE.sub("", tex)
+    if not fetched:
+        return tex
+    # No newline of its own: the line takes over the one that already followed the
+    # block, so that removing it above is the exact inverse of adding it here.
+    # Ending it with "\n" instead left a blank line behind on every removal, and
+    # the file grew by one line a week.
+    note = (f"\n{_ASOF_PREFIX}{fetched}, from Google Scholar. Rewritten by "
+            f"update.py; edits here do not last.")
+    return _STATS_RE.sub(lambda m: m.group(0) + note, tex, count=1)
 
 
 # Each CV section and how its \nocite{} list is located. Data rather than a

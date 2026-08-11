@@ -17,12 +17,13 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import date
 from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 
 import config
-from citations_io import read_citation_rows, write_citation_rows
+from citations_io import FETCHED_KEY, read_citation_rows, write_citation_rows
 
 DEFAULT_USER_ID = config.SCHOLAR_USER_ID
 DEFAULT_OUTPUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "citations.csv")
@@ -205,7 +206,17 @@ def _parse_profile_stats(html: str) -> dict | None:
 
 
 def write_stats(stats: dict, path: str) -> None:
-    """Atomically write profile stats to a JSON file."""
+    """Atomically write profile stats to a JSON file, dated today.
+
+    The date is recorded here, at the only place these numbers are written, so
+    that nothing downstream has to infer it from a file mtime -- git does not
+    carry mtimes, so in CI and in every fork the counts look freshly fetched
+    whatever their age. It is also what the CV prints beside the totals: a
+    citation count is a measurement, and a measurement without its date cannot be
+    told from a current one.
+    """
+    stats = dict(stats)
+    stats[FETCHED_KEY] = date.today().isoformat()
     tmp = path + ".tmp"
     try:
         with open(tmp, "w") as f:

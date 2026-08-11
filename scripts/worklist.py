@@ -29,7 +29,12 @@ sys.path.insert(0, ROOT)
 import build_bib
 from bib_edit import get_missing_bib_entries
 from bib_utils import find_duplicate_keys, parse_bibtex, read_df
-from citations_io import read_citation_rows
+from citations_io import (
+    STALE_AFTER_DAYS,
+    days_since_fetch,
+    fetched_date,
+    read_citation_rows,
+)
 from identity import (
     MATCH_EXACT_ID,
     IdentityStore,
@@ -57,6 +62,8 @@ EXTERNAL = ("waiting on a source",
             "Cannot be fixed here -- it depends on an external record.")
 INFORMATIONAL = ("informational",
                  "Handled automatically; listed so the decision is visible.")
+STALE = ("gone stale",
+         "Nothing is wrong with the data; it is old. One run refreshes it.")
 
 
 class Section:
@@ -181,6 +188,24 @@ def gather():
     attempts = load_attempts()
 
     sections = []
+
+    # ── how old the numbers are ──────────────────────────────────────────────
+    # First, because it qualifies everything under it: a citation join reported
+    # against two-month-old counts is a join against two-month-old counts.
+    stale = days_since_fetch(ROOT)
+    if stale is not None and stale > STALE_AFTER_DAYS:
+        fetched = fetched_date(ROOT)
+        sections.append(Section(
+            f"Citation counts are {stale} days old",
+            f"Fetched {fetched}; the CV has been showing those numbers "
+            f"since. The weekly fetch runs on the author's own machine — Scholar "
+            f"answers a datacenter address with a CAPTCHA, so CI cannot do it — and "
+            f"{STALE_AFTER_DAYS} days without one means that schedule stopped "
+            f"rather than merely slipped. `python update.py` refreshes them; "
+            f"`launchctl list com.publications.update` says whether the weekly job "
+            f"is still loaded at all.",
+            [f"- last Scholar fetch: {fetched} ({stale} days ago)"],
+            nature=STALE))
 
     # ── duplicates: these break the citation join by construction ────────────
     dup_rows = find_duplicate_titles(names)
@@ -445,8 +470,8 @@ def render(sections, result):
         return "\n".join(out)
 
     needs_you = [s for s in sections
-                 if s.nature in (ONE_OFF, RECURRING)]
-    out += [f"**{len(needs_you)} of {len(sections)} sections need a decision from "
+                 if s.nature in (ONE_OFF, RECURRING, STALE)]
+    out += [f"**{len(needs_you)} of {len(sections)} sections need something from "
             f"you**; the rest resolve themselves, wait on an external source, or "
             f"are handled automatically and listed for visibility.", ""]
 
@@ -472,8 +497,10 @@ def main(argv=None):
     if args.check:
         # Only sections that need a decision count as a failure. Informational
         # and self-resolving ones would make --check permanently red and
-        # therefore ignored.
-        actionable = [s for s in sections if s.nature in (ONE_OFF, RECURRING)]
+        # therefore ignored. Stale data does count: nobody has to decide
+        # anything, but nothing clears it either until someone runs the pipeline.
+        actionable = [s for s in sections
+                      if s.nature in (ONE_OFF, RECURRING, STALE)]
         items = sum(len(s.lines) for s in actionable)
         print(f"{items} actionable item(s) in {len(actionable)} section(s) "
               f"({total} total across {len(sections)})")

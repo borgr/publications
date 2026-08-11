@@ -408,8 +408,30 @@ def test_stats_are_written_as_json(tmp_path):
     path = str(tmp_path / "profile_stats.json")
     fc.write_stats({"citations": 5, "h_index": 2}, path)
     import json
-    assert json.load(open(path)) == {"citations": 5, "h_index": 2}
+    written = json.load(open(path))
+    assert (written["citations"], written["h_index"]) == (5, 2)
     assert not os.path.exists(path + ".tmp")
+
+
+def test_the_numbers_are_written_with_the_date_they_were_fetched(tmp_path):
+    """A citation count without its date cannot be told from a current one, and
+    the file's mtime is not that date: git resets it at every clone, so CI and
+    every fork see counts of any age as fetched seconds ago. The CV prints this
+    date beside the totals.
+    """
+    from datetime import date
+    path = str(tmp_path / "profile_stats.json")
+    fc.write_stats({"citations": 5}, path)
+    import json
+    assert json.load(open(path))["fetched"] == date.today().isoformat()
+
+
+def test_dating_the_stats_does_not_mutate_the_caller_s_dict(tmp_path):
+    """The scraped dict is the parser's return value, and is asserted on
+    elsewhere; writing it should not add a key to it."""
+    stats = {"citations": 5}
+    fc.write_stats(stats, str(tmp_path / "profile_stats.json"))
+    assert stats == {"citations": 5}
 
 
 def test_a_failed_stats_write_leaves_the_previous_file_intact(tmp_path, monkeypatch):
@@ -422,7 +444,7 @@ def test_a_failed_stats_write_leaves_the_previous_file_intact(tmp_path, monkeypa
     with pytest.raises(OSError):
         fc.write_stats({"citations": 9}, path)
     import json
-    assert json.load(open(path)) == {"citations": 5}
+    assert json.load(open(path))["citations"] == 5
     assert not os.path.exists(path + ".tmp"), "a stale temp file was left behind"
 
 
