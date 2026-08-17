@@ -11,7 +11,7 @@ Time of publish ID,"Warning, incomplete?",Venue,Name,Bib,Authors,year,NLP,Small 
 11,,"US Patent App. 18/454,124, 2025",Automated training on massive multitask,,"L CHOSHEN, E Venezian, SB Don-Yehiya",2025,,,,,,,,,,,,,,,,,,,,1,,,,,,,
 12,,"US Patent App. 18/350,269, 2025",Base model selection for finetuning,,"L CHOSHEN, E Venezian, SB Don-Yehiya, YA Katz, N Slonim",2025,,,,,,,,,,,,,,,,,,,,1,,,,,,,
 13,,"Proceedings of the 27th Conference on Computational Natural Language …, 2023",MuLER: Detailed and Scalable Reference-based Evaluation,karidi2023muler,"T Karidi, L Choshen, G Patel, O Abend",2023,,,,,,,,,,,,,,,,,,,,1,,,,,,,
-14,,"NeurIPS 2025 Workshop on Evaluating the Evolving LLM Lifecycle: Benchmarks …, 0",A Statistical Framework for Game-Based AI Evaluation,,"FM Polo, L Choshen, Y Sun, K Greenewald",,,,,,,,,,,,,,,,,,,,,1,,,,,,,
+14,,"NeurIPS 2025 Workshop on Evaluating the Evolving LLM Lifecycle: Benchmarks …, 0",A Statistical Framework for Game-Based AI Evaluation,polo2025statistical,"FM Polo, L Choshen, Y Sun, K Greenewald",2025,,,,,,,,,,,,,,,,,,,,1,,,,,,,
 15,,acl,Stop Guessing When to Stop Testing: Efficient Model Evaluation with Just Enough Data,arviv2026stop,"O Arviv, K Greenewald, Y Perlitz, H Mulian, M Shmueli-Scheuer, ...",2026,,,,,,,,,,,,,,,,,,,,1,,,,,,,
 16,,"arXiv preprint arXiv:2606.24579, 2026",Cross-Lingual Exploration for Parametric Knowledge,diskind2026cross,"E Diskind, I Trainin, U Shaham, L Choshen, I Szpektor, O Abend",2026,,,,,,,,,,,,,,,,,,,,1,,,,,,,
 17,,"EvalEval Coalition Blog, April, 2026",AI evals are becoming the new compute bottleneck,,"A Ghosh, Y Mai, G Channing, L Choshen",2026,,,,,,,,,,,,,,,,,,,,1,,,,,,,
@@ -119,3 +119,4 @@ Time of publish ID,"Warning, incomplete?",Venue,Name,Bib,Authors,year,NLP,Small 
 ,,ArXiv,Every Eval Ever: A Unifying Schema and Community Repository for AI Evaluation Results,batzner2026every,"J Batzner, SH Nelaturu, A Kornilova, J Crall, T Cerruti, Y Long, Y Mai, ...",2026,1,,,,,,,,,,,,,,,,,,,,,,,,,,
 ,,ArXiv,"Instructions shape Production of Language, not Processing",waldis2026instructions,"A Waldis, L Choshen, Y Hou, Y Perlitz",2026,1,,,,,,,,,,,,,,,,,,,,,,,,,,
 ,,ArXiv,Growing Pains: Extensible and Efficient LLM Benchmarking Via Fixed Parameter Calibration,habba2026growing,"E Habba, I Itzhak, A Yehudai, Y Perlitz, E Bandel, M Shmueli-Scheuer, ...",2026,1,,,,,,,,,,,,,,,,,,,,,,,,,,
+20,,"The Second Workshop on Language Models for Scientific Discovery, 0",No Harness Rules Them All: Harness Choice in Automated Discovery Does Not Generalize,,"A Gupta, J Lei, A Lu, G Anumanchipalli, L Choshen",,,,,,,,,,,,,,,,,,,,,1,,,,,,,
