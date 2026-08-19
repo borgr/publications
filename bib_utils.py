@@ -388,6 +388,74 @@ def lists_author(content, full_name):
     return not fields.strip() or wanted in normalize_text(fields)
 
 
+# A name position that stands in for the names it does not give. Matched against
+# one *name* at a time, never against the whole field: "and others" splits to the
+# name "others", while the surname "Smothers" -- Evan Smothers, on the Llama 3
+# entry's 561-author list -- merely contains it, and a substring test reports that
+# entry as truncated when nothing about it is.
+_NAME_STANDIN_RE = re.compile(r'^(?:others|et\.?\s*al\.?|\.{3}|\u2026)$', re.IGNORECASE)
+
+# author and editor are the fields BibTeX splits on " and ". Nothing else is a
+# name list, so nothing else can be truncated in this particular way.
+CREDIT_FIELDS = ("author", "editor")
+
+
+def truncates_name_list(value):
+    """True if a BibTeX name-list value ends in a stand-in for the rest.
+
+    `author = {A and B and others}` is how Google Scholar's BibTeX export, and
+    several hand-pasted entries, cap a long author list -- and `.bst` styles
+    render that trailing `others` as a literal "et al." *inside the bibliography
+    entry*, where a reader sees an incomplete credit rather than a style choice.
+    (Abbreviating a long list in a *citation* is the style's job and is fine; this
+    is about the entry itself.)
+
+    Split on " and " first. A comma-form name can also carry the stand-in --
+    `{Doe, John, et al.}` -- so the segment after a name's last comma is checked
+    too.
+    """
+    if not value:
+        return False
+    for name in re.split(r'\s+and\s+', str(value)):
+        # Two trims, and the untrimmed form is tried first: stripping trailing
+        # punctuation is what lets "et al." match, and is also what would reduce
+        # a bare "..." to the empty string and let it through.
+        plain = name.strip().strip('{}').strip()
+        for bare in (plain, plain.strip(' .,')):
+            if _NAME_STANDIN_RE.match(bare):
+                return True
+            if ',' in bare and _NAME_STANDIN_RE.match(bare.rsplit(',', 1)[-1].strip()):
+                return True
+    return False
+
+
+def truncated_credit_fields(content):
+    """Which of an entry's name-list fields stand in for names. Possibly none.
+
+    Reads through `extract_field`, so a value spanning several lines or delimited
+    by quotes rather than braces is read whole -- an ACL Anthology entry writes
+    `author = "Charpentier, Lucas  and\n  Choshen, Leshem"`, and a line-oriented
+    scan sees neither the field's start nor its end on the same line.
+    """
+    return [f for f in CREDIT_FIELDS
+            if truncates_name_list(extract_field(content, f))]
+
+
+def name_count(value):
+    """How many names a BibTeX name list gives, not counting a stand-in.
+
+    Used to decide whether a replacement is an improvement: a source's list is
+    only worth adopting over a curated one if it is longer *and* complete.
+    """
+    if not value:
+        return 0
+    n = 0
+    for name in re.split(r'\s+and\s+', str(value)):
+        if name.strip() and not truncates_name_list(name):
+            n += 1
+    return n
+
+
 def _entry_year(entry):
     m = re.search(r'\b(1[89]\d{2}|20\d{2}|21\d{2})\b',
                   extract_field(entry.get("content", "") or "", "year"))

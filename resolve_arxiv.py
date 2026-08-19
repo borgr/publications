@@ -59,6 +59,7 @@ from bib_edit import (
     _replace_key,
     get_arxiv_entries,
     get_missing_bib_entries,
+    get_truncated_author_entries,
     update_bib_inplace,
 )
 from bib_utils import (
@@ -67,6 +68,7 @@ from bib_utils import (
     extract_field,
     lists_author,
     normalize_text,
+    truncated_credit_fields,
 )
 from identity import harvest_ids_from_bibtex, harvest_ids_from_s2
 
@@ -1364,11 +1366,12 @@ def main(argv=None) -> None:
 
     arxiv_entries = get_arxiv_entries(bib_text)
     missing_entries = [] if args.skip_missing else get_missing_bib_entries(bib_text)
+    truncated_entries = get_truncated_author_entries(bib_text)
 
     # Deduplicate
     seen: set[str] = set()
     candidates = []
-    for e in arxiv_entries + missing_entries:
+    for e in arxiv_entries + missing_entries + truncated_entries:
         if e["item_name"] not in seen:
             seen.add(e["item_name"])
             candidates.append(e)
@@ -1379,6 +1382,9 @@ def main(argv=None) -> None:
     print(f"Found {len(arxiv_entries)} arXiv entries in {os.path.basename(args.bib)}")
     if not args.skip_missing:
         print(f"Found {len(missing_entries)} table rows with no BibTeX")
+    if truncated_entries:
+        print(f"Found {len(truncated_entries)} entries whose author list ends in a "
+              f"stand-in for the rest")
     n_deprio = sum(1 for e in candidates if attempts.get(e["item_name"], 0) >= _DEPRIORITIZE_AFTER)
     if n_deprio:
         print(f"  ({n_deprio} entries with ≥{_DEPRIORITIZE_AFTER} prior attempts sorted last)")
@@ -1421,7 +1427,15 @@ def main(argv=None) -> None:
             resolved_bibs.append(bib)
             # Only an entry that is still a preprint has anything to gain, and
             # only a published record has anything to give.
-            if _is_corr(content) and not _is_corr(bib):
+            #
+            # ...with one other thing worth gaining: a complete author list. An
+            # entry can be published already and still credit "and others", and
+            # then no venue changes hands and this would have nothing to write
+            # back. `merge_published` decides whether the replacement's list is
+            # actually better; this only has to let it be asked.
+            fixes_credits = (truncated_credit_fields(content)
+                             and not truncated_credit_fields(bib))
+            if (_is_corr(content) and not _is_corr(bib)) or fixes_credits:
                 updates.append((key, bib, source))
 
     with open(args.output, "w") as f:

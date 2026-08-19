@@ -27,8 +27,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import build_bib
-from bib_edit import get_missing_bib_entries
-from bib_utils import find_duplicate_keys, parse_bibtex, read_df
+from bib_edit import get_missing_bib_entries, get_truncated_author_entries
+from bib_utils import (
+    extract_field,
+    find_duplicate_keys,
+    name_count,
+    parse_bibtex,
+    read_df,
+    truncated_credit_fields,
+)
 from citations_io import (
     STALE_AFTER_DAYS,
     days_since_fetch,
@@ -254,6 +261,31 @@ def gather():
             "nothing: a lookup a source never answered is not counted, so the "
             "number means \"no source has it\" rather than \"the network was "
             "flaky\".",
+            lines, nature=EXTERNAL))
+
+    # ── author lists that stand in for the names they omit ───────────────────
+    # Distinct from every other item here in that the entry is not missing and not
+    # unpublished -- it is complete except that its credit line ends in "and
+    # others", which the bibliography prints as a literal "et al." So nothing else
+    # would ever select it for another lookup, and it would stay wrong forever.
+    truncated = get_truncated_author_entries(bib_text)
+    if truncated:
+        lines = []
+        for entry in sorted(truncated, key=lambda e: e["item_name"]):
+            fields = truncated_credit_fields(entry["content"])
+            named = name_count(extract_field(entry["content"], fields[0]))
+            lines.append(f"- `{entry['item_name']}` — {entry['title'][:70]}")
+            lines.append(f"  - {fields[0]} names {named} then stops at a stand-in")
+        sections.append(Section(
+            f"Author lists that stop at \"and others\" ({len(truncated)})",
+            "Google Scholar's BibTeX export caps a long author list, and the cap "
+            "survives into the CV: `.bst` renders the trailing `others` as \"et "
+            "al.\" inside the entry, so the bibliography credits some of the "
+            "authors and abbreviates the rest. Step 3 now looks these up again "
+            "even when the entry is already published, and adopts a source's list "
+            "when it is complete and no shorter. What is left is a paper whose "
+            "full list no source this pipeline queries carries -- paste the "
+            "authors in by hand, or take them from the publisher's own BibTeX.",
             lines, nature=EXTERNAL))
 
     # ── citation matches that a human should confirm once ────────────────────

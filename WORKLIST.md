@@ -42,11 +42,10 @@ Scholar holds the preprint and the published version as separate records; their 
   - 100% (exact-id) The Mighty ToRR: A Benchmark for Table Reasoning and Robustness in LLMs
   - 95% (fuzzy-title) The Mighty ToRR: A Benchmark for Table Reasoning and Robustness in LLMs
 
-## CV output built but not committed (2)
+## CV output committed but not pushed (1)
 
 *recurring* — Will reappear as new papers arrive. Automating it is worthwhile.
 
-These are generated and correct on disk, but Overleaf still serves the previous version — compiling there will show stale numbers. `python update.py` (without --no-push) commits and pushes them.
+Committed in the overleaf/ submodule but not on the Overleaf remote, so the project there is behind. `git -C overleaf push origin` sends them, or re-run `python update.py`.
 
-- `overleaf/Wzmn.bib` has uncommitted changes
-- `overleaf/main.tex` has uncommitted changes
+- da639d1 chore: auto-update publications pipeline output

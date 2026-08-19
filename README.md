@@ -496,6 +496,33 @@ known DOI, clibib resolved it exactly, and the CV listed "Global burden of 292
 causes of death in 204 countries and territories". Nothing raised. The two titles
 score 0.22; a genuinely retitled paper scores 0.77 and passes on its year.
 
+### An author list that ends in "and others"
+
+Google Scholar's BibTeX export caps a long author list at ten names and appends
+`and others`; step 2 writes what Scholar gives. `.bst` renders that trailing
+`others` as a literal **"et al." inside the printed entry**, so the bibliography
+names some of a paper's authors and abbreviates the rest.
+
+No other check selects such an entry. It exists, it names the CV's owner, and it
+can be published already — with a venue, a DOI, pages and a publisher — so the
+preprint-to-published gate is satisfied and it is never looked up again. Its credit
+line stays wrong for as long as the entry lives.
+
+So `bib_edit.get_truncated_author_entries` is a third candidate source for step 3,
+alongside the arXiv entries and the table rows with no BibTeX, and the only one
+that can select an entry which is already published. `merge_published` then gains
+its one exception to *leave every field but the venue alone*: it adopts a source's
+`author` list, but only when the existing one is truncated, the replacement is not,
+and the replacement is no shorter — so a source with fewer names can never quietly
+delete a credit, and a complete curated list is still never overwritten.
+
+The detector splits on `" and "` and asks whether a whole **name** is the stand-in.
+A substring test for `others` reports the Llama 3 entry as truncated on account of
+its co-author Evan Smothers, among 561 others who are all named.
+
+What no source can complete is listed in `WORKLIST.md` for hand-pasting, and
+`tests/test_truncated_authors.py` fails if `orig.bib` holds one.
+
 ## Pruning orig.bib
 
 `orig.bib` accumulates: a paper's arXiv entry stays behind when step 3 moves its row

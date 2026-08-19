@@ -28,10 +28,13 @@ sys.path.insert(0, FILE_DIR)
 
 from bib_utils import (
     is_wellformed_entry,
+    name_count,
     normalize_text,
     parse_bibtex,
     publication_rank,
     read_df,
+    truncated_credit_fields,
+    truncates_name_list,
 )
 
 # ── Classifying an entry ──────────────────────────────────────────────────────
@@ -191,6 +194,18 @@ _BOOKKEEPING = ("timestamp", "biburl", "bibsource")
 _CORR_VENUE = re.compile(r'^\{?\s*(corr\b|abs/|arxiv)', re.I)
 
 
+def _unwrap(raw_value):
+    """A field's text without its outer braces or quotes.
+
+    `split_entry` keeps delimiters so an untouched field can be written back
+    byte-for-byte; the name-list checks want the text.
+    """
+    v = str(raw_value or "").strip()
+    if len(v) >= 2 and ((v[0] == '{' and v[-1] == '}') or (v[0] == v[-1] == '"')):
+        return v[1:-1].strip()
+    return v
+
+
 def merge_published(old_bib: str, new_bib: str) -> str:
     """Move the venue across; leave every other field exactly as it was written.
 
@@ -205,6 +220,25 @@ def merge_published(old_bib: str, new_bib: str) -> str:
     if not ntype or not new_fields or not old_fields:
         return old_bib
     new = {f: v for f, v, _ in new_fields if f in _VENUE_FIELDS}
+    # The one field outside the venue that a source may overwrite, and only in
+    # the one direction that is not a matter of taste. `author` is curated here
+    # -- which is why it is not in _VENUE_FIELDS -- but a list ending in `and
+    # others` is not a curation choice, it is a list the source it came from
+    # (Scholar's export, usually) declined to finish, and `.bst` prints that as a
+    # literal "et al." inside the entry. Adopted only when the replacement both
+    # finishes the list and is at least as long, so a source with *fewer* names
+    # can never quietly shorten a complete credit.
+    for f, v, _ in new_fields:
+        if f != "author":
+            continue
+        old_author = next((ov for of, ov, _ in old_fields if of == "author"), None)
+        if old_author is None or not truncates_name_list(_unwrap(old_author)):
+            continue
+        if truncates_name_list(_unwrap(v)):
+            continue
+        if name_count(_unwrap(v)) < name_count(_unwrap(old_author)):
+            continue
+        new["author"] = v
     cols = [len(f) + len(s) for f, s in
             re.findall(r'\n\s*([A-Za-z][\w-]*)( *)=', old_bib)]
     col = max(set(cols), key=cols.count) if cols else 0     # the column most lines use
@@ -312,6 +346,21 @@ def update_bib_inplace(
 
 def get_arxiv_entries(bib_text: str) -> list[dict]:
     return [e for e in parse_bibtex(bib_text) if _is_arxiv(e)]
+
+
+def get_truncated_author_entries(bib_text: str) -> list[dict]:
+    """Entries whose author or editor list stands in for names it does not give.
+
+    A third candidate source for step 3, alongside the arXiv entries and the
+    table rows with no BibTeX -- and the only one that can select an entry which
+    is *already published*. Nothing else would: the ladder exists to turn
+    preprints into published records, so an @inproceedings with a DOI, a venue
+    and `author = {... and others}` is finished by every other measure and would
+    never be looked up again. Its credit line stays wrong for as long as the entry
+    lives.
+    """
+    return [e for e in parse_bibtex(bib_text)
+            if truncated_credit_fields(e.get("content", ""))]
 
 
 def placeholder_key(year: str, title: str, taken=()) -> str:
