@@ -420,6 +420,33 @@ def choose_published(entries):
     return ordered[0], ordered[1:]
 
 
+def drop_field(content, field):
+    """Remove a field and its value entirely. Returns content unchanged if absent.
+
+    Built on `find_field_span` rather than a regex of its own, so it inherits both
+    brace matching and quoted-value handling. A field value can contain commas,
+    braces and newlines -- PMLR ships whole abstracts inside an entry -- and a
+    comma-terminated pattern truncates the value, leaving its tail as stray text
+    inside the entry. That is unparseable BibTeX, not a cosmetic problem.
+    """
+    span = find_field_span(content, field)
+    if span is None:
+        return content
+    _, end, delimiter = span
+    start = None
+    for candidate in re.finditer(r'(,?\s*)\b' + re.escape(field) + r'\s*=\s*',
+                                 content, re.IGNORECASE):
+        if candidate.end() <= end:
+            start = candidate
+    if start is None:
+        return content
+    stop = end + (1 if delimiter else 0)
+    trailing = re.match(r'\s*,', content[stop:])
+    if trailing and not start.group(1).lstrip().startswith(','):
+        stop += trailing.end()
+    return content[:start.start()] + content[stop:]
+
+
 def escape_field_value(text):
     """Make a plain-text string safe as a braced BibTeX field value.
 

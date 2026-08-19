@@ -123,6 +123,7 @@ def test_find_duplicate_keys():
 
 from bib_utils import (
     choose_published,
+    drop_field,
     escape_field_value,
     is_preprint,
     is_wellformed_entry,
@@ -506,3 +507,37 @@ def test_is_preprint_and_publication_rank_never_disagree():
     # an @article with no journal scored 48.
     assert min(publication_rank(e) for e in published) \
         > max(publication_rank(e) for e in preprints)
+
+
+# ── drop_field ───────────────────────────────────────────────────────────────
+
+def test_drop_field_removes_a_braced_value_whole():
+    """PMLR ships abstracts inside the entry, and an abstract has commas and nested
+    braces. A comma-terminated pattern truncates it and leaves the tail as stray
+    text, which is unparseable BibTeX rather than untidy BibTeX."""
+    content = "  title = {T},\n  abstract = {a, with {nested} braces},\n  year = {2020}\n"
+    out = drop_field(content, "abstract")
+    assert "abstract" not in out and "nested" not in out
+    assert "title = {T}" in out and "year = {2020}" in out
+
+
+def test_drop_field_handles_a_quoted_value():
+    """The reason this delegates to find_field_span instead of matching braces
+    itself: ACL Anthology entries quote their values, and a brace-only
+    implementation silently leaves the field in place."""
+    content = '  title = "T",\n  abstract = "a, with commas",\n  year = "2020"\n'
+    out = drop_field(content, "abstract")
+    assert "abstract" not in out
+    assert 'title = "T"' in out and 'year = "2020"' in out
+
+
+def test_drop_field_on_the_last_field_leaves_valid_bibtex():
+    content = "  title = {T},\n  abstract = {tail}\n"
+    out = drop_field(content, "abstract")
+    assert "abstract" not in out
+    assert out.strip().endswith("{T},") or out.strip().endswith("{T}")
+
+
+def test_drop_field_is_a_no_op_when_the_field_is_absent():
+    content = "  title = {T},\n  year = {2020}\n"
+    assert drop_field(content, "abstract") == content

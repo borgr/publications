@@ -62,6 +62,7 @@ from bib_edit import (
     update_bib_inplace,
 )
 from bib_utils import (
+    drop_field,
     escape_field_value,
     extract_field,
     lists_author,
@@ -815,33 +816,6 @@ _PMLR_URL_RE = re.compile(r'https?://(?:proceedings\.)?mlr\.press/v\d+/[A-Za-z0-
 _PMLR_BIB_RE = re.compile(r'id="bibtex"[^>]*>(.*?)</code>', re.S)
 
 
-def _drop_field(bibtex: str, field: str) -> str:
-    """Remove one field, brace-counting its value rather than matching to a comma.
-
-    PMLR ships the full abstract inside the entry, and an abstract contains
-    commas, braces and line breaks. A regex that stops at the first comma
-    truncates it and leaves the remainder as stray text inside the entry.
-    """
-    m = re.search(r'\n\s*' + field + r'\s*=\s*', bibtex, re.IGNORECASE)
-    if not m:
-        return bibtex
-    i = m.end()
-    if i >= len(bibtex) or bibtex[i] != '{':
-        return bibtex
-    depth = 0
-    for j in range(i, len(bibtex)):
-        if bibtex[j] == '{':
-            depth += 1
-        elif bibtex[j] == '}':
-            depth -= 1
-            if depth == 0:
-                end = j + 1
-                if end < len(bibtex) and bibtex[end] == ',':
-                    end += 1
-                return bibtex[:m.start()] + bibtex[end:]
-    return bibtex
-
-
 def pmlr_url_in(bibtex: str) -> str | None:
     """The PMLR landing page a resolved entry points at, if any."""
     m = _PMLR_URL_RE.search(bibtex or "")
@@ -871,7 +845,7 @@ def fetch_pmlr_bib(page_url: str, original_key: str) -> str | None:
     bib = html.unescape(m.group(1)).strip()
     if not bib.startswith("@"):
         return None
-    bib = _drop_field(bib, "abstract")
+    bib = drop_field(bib, "abstract")
     return _replace_key(bib, original_key)
 
 
