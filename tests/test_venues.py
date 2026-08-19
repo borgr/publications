@@ -266,3 +266,32 @@ def test_the_live_bibliography_is_entirely_parseable():
     bad = [e["item_name"] for e in entries
            if not is_wellformed_entry(e["beg"] + e["rest"], e["item_name"])]
     assert bad == [], bad
+
+
+def test_no_ranked_venue_is_mistaken_for_a_workshop():
+    """A guard on the workshop demotion in `publication_rank`, which is a regex over
+    venue prose -- the one heuristic left in the ranking.
+
+    Its failure direction is deliberate: an unrecognised workshop is treated as a
+    conference, so the cost is a missed demotion, which is what the code did before
+    the tier existed. The dangerous direction is the other one -- widening the
+    pattern until it swallows a real venue and demotes a main-conference paper
+    below the workshop version of the same paper. venues.yaml is the curated list
+    of venues that matter, so it is the right thing to check the pattern against,
+    and it costs nothing at runtime.
+    """
+    from bib_utils import _FINDINGS_RE, _WORKSHOP_RE
+
+    venues = Venues.load()
+    offenders = []
+    for acronym, entry in venues.venues.items():
+        if (entry or {}).get("kind") not in ("conference", "journal"):
+            continue
+        names = list(entry.get("match") or [])
+        names.append((entry.get("scholar_metrics") or {}).get("name") or "")
+        for name in filter(None, names):
+            if _WORKSHOP_RE.search(name) and not _FINDINGS_RE.search(name):
+                offenders.append((acronym, name))
+    assert not offenders, (
+        f"the workshop pattern matches ranked venues, which would demote real "
+        f"papers: {offenders}")

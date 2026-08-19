@@ -452,3 +452,53 @@ def test_the_state_file_stays_valid_json(h):
     update.main([])
     with open(h.state_path) as f:
         json.load(f)
+
+
+# --- a source that stops answering for good ------------------------------
+
+def _silent_resolve(monkeypatch, days_since_success):
+    """A run whose lookups all go unanswered, with step 3 last successful
+    `days_since_success` days ago (None = never)."""
+    monkeypatch.setattr(update, "unanswered_lookups", lambda: 3)
+    monkeypatch.setattr(update, "reset_unanswered_lookups", lambda: None)
+    monkeypatch.setattr(update.PipelineState, "ever_completed",
+                        lambda self, step: days_since_success is not None)
+    monkeypatch.setattr(update.PipelineState, "age_hours",
+                        lambda self, step: (days_since_success or 0) * 24)
+
+
+def test_a_bad_night_of_lookups_stays_quiet(h, monkeypatch):
+    """Sources go quiet for a night all the time. Alerting on that trains you to
+    ignore the alert, which is the failure this whole file is about."""
+    _silent_resolve(monkeypatch, days_since_success=2)
+    update.main(["--no-notify"])
+    assert not h.notified
+
+
+def test_a_month_of_unanswered_lookups_is_reported(h, monkeypatch):
+    """The quiet failure that matters: every run retries, every run exits 0, and
+    the CV keeps citing preprints that were published months ago."""
+    _silent_resolve(monkeypatch, days_since_success=31)
+    with pytest.raises(SystemExit) as exc:
+        update.main([])
+    assert exc.value.code == 1
+    assert h.notified and "resolve" in h.notified[0].lower()
+
+
+def test_a_first_run_that_never_resolved_does_not_alert(h, monkeypatch):
+    """`age_hours` is inf both for "never ran" and "ran long ago". Only the second
+    means something stopped working, so a fresh clone must stay quiet."""
+    _silent_resolve(monkeypatch, days_since_success=None)
+    update.main(["--no-notify"])
+    assert not h.notified
+
+
+def test_answered_lookups_never_alert_however_stale_the_step(h, monkeypatch):
+    """Staleness alone is not the signal -- a step can be old simply because
+    nothing changed. The alert needs both age and a run that could not finish."""
+    monkeypatch.setattr(update, "unanswered_lookups", lambda: 0)
+    monkeypatch.setattr(update, "reset_unanswered_lookups", lambda: None)
+    monkeypatch.setattr(update.PipelineState, "ever_completed", lambda self, step: True)
+    monkeypatch.setattr(update.PipelineState, "age_hours", lambda self, step: 400 * 24)
+    update.main(["--no-notify"])
+    assert not h.notified

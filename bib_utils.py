@@ -197,7 +197,27 @@ def normalize_text(txt):
 
 
 # Entry types that are a published venue by definition.
+_PUBLISHED_SCORE = 50   # what an entry is worth once its venue name says it is published
+_PREPRINT_SCORE = 10    # ...and once its venue name says it is not
+
 _PUBLISHED_TYPES = {"inproceedings", "incollection", "book", "inbook", "proceedings"}
+
+# A workshop paper is a real publication and belongs in the CV. It is just not the
+# version of record when the *same paper* also has a main-conference or journal
+# one, which happens: "Enhancing Multilingual LLM Pretraining with Model-Based
+# Data Selection" is at NeurIPS 2025 and at SwissText 2025, same three authors,
+# same title. Both are @inproceedings with a booktitle, a DOI, a publisher and
+# pages, so before this they scored identically and the tie went to whichever
+# record the source happened to return first.
+_WORKSHOP_RE = re.compile(
+    r'\b(workshop|co-located with|companion (?:volume|proceedings)'
+    r'|student research workshop|birds of a feather)\b', re.IGNORECASE)
+
+# Findings is not a workshop. It is a main-track-adjacent archival venue of the
+# same conference, so penalising it as one would rank a Findings paper below a
+# genuine workshop paper -- backwards. It is named here only to keep the workshop
+# test from ever being widened into it by accident.
+_FINDINGS_RE = re.compile(r'\bfindings of the\b', re.IGNORECASE)
 # Entry types that are a preprint or grey literature by definition.
 _PREPRINT_TYPES = {"misc", "unpublished", "techreport"}
 
@@ -222,7 +242,7 @@ def publication_rank(entry):
 
     score = 0
     if etype in _PUBLISHED_TYPES:
-        score += 50
+        score += _PUBLISHED_SCORE
     elif etype in _PREPRINT_TYPES:
         score += 0
     elif etype == "article":
@@ -232,9 +252,33 @@ def publication_rank(entry):
     else:
         score += 20
 
-    # Corroborating evidence of a real venue.
-    if extract_field(content, "booktitle"):
+    # Corroborating evidence of a real venue. A journal name counts the same as a
+    # booktitle: an @article cannot have a booktitle, so crediting only booktitles
+    # docked every journal ~20 points against a conference paper and ranked a
+    # workshop above TACL. Preprint "journals" are excluded -- `journal = {ArXiv
+    # preprint}` is not evidence of a venue, it is the absence of one.
+    journal = extract_field(content, "journal")
+    real_journal = bool(journal) and not _PREPRINT_JOURNAL_RE.search(journal)
+    booktitle = extract_field(content, "booktitle")
+    if booktitle or real_journal:
         score += 15
+
+    # The entry *type* is not evidence. It is whichever type the source that
+    # produced the entry happened to choose, and the sources disagree: Crossref
+    # returns an AAAI paper as @article because AAAI's own metadata models its
+    # proceedings as a journal, arXiv-shaped entries for published papers arrive as
+    # @misc, and a hand-pasted entry is whatever someone typed. The *venue name* is
+    # the reliable signal -- "Proceedings of...", "Advances in...", "Transactions
+    # of..." are what they say they are, and "ArXiv preprint" likewise.
+    #
+    # So a venue name overrides the type rather than merely adding to it. Only in
+    # the direction the name is evidence for, and only up to the published floor:
+    # this corrects a mislabelled type, it does not invent a stronger venue than
+    # the entry claims.
+    if booktitle or real_journal:
+        score = max(score, _PUBLISHED_SCORE)
+    elif journal and _PREPRINT_JOURNAL_RE.search(journal):
+        score = min(score, _PREPRINT_SCORE)
     if extract_field(content, "doi"):
         score += 10
     if extract_field(content, "publisher"):
@@ -244,28 +288,69 @@ def publication_rank(entry):
     if extract_field(content, "volume"):
         score += 3
 
+    # A workshop ranks below a conference or a journal, and above a preprint.
+    #
+    # The magnitude is load-bearing: it has to exceed the spread of the
+    # corroborating-evidence bonuses above (10 + 5 + 5 + 3 = 23), because those
+    # measure how *complete a record* is, not how strong a venue is. At -12 a
+    # sparse JMLR entry carrying only a volume and pages lost to a SwissText entry
+    # that happened to have a DOI and a publisher too. Venue tier has to dominate
+    # record completeness, or the tie-break answers a different question than the
+    # one being asked.
+    #
+    # Still well short of the 50 an entry gets for being published at all, so a
+    # workshop paper outranks every preprint. It only loses to another record *of
+    # the same paper* at a stronger venue.
+    venue = extract_field(content, "booktitle") or extract_field(content, "journal") or ""
+    if venue and _WORKSHOP_RE.search(venue) and not _FINDINGS_RE.search(venue):
+        score -= 25
+
     # Explicit preprint markers pull back down -- but only when nothing else in
     # the entry evidences a real venue. An arXiv id stays true after publication
     # and is worth keeping in the record, so penalising a @inproceedings that has
     # a booktitle, pages and a DOI purely for remembering its eprint ranked it
     # below an otherwise identical entry that had forgotten it.
-    if not (extract_field(content, "booktitle") or extract_field(content, "publisher")):
+    if not (extract_field(content, "booktitle") or real_journal
+            or extract_field(content, "publisher")):
         if re.search(r'\barchiveprefix\s*=', content, re.IGNORECASE):
             score -= 8
         if re.search(r'\beprint\s*=', content, re.IGNORECASE):
             score -= 4
-    return score
+
+    # Published and preprint occupy separate bands, and nothing above can cross
+    # them. Without this they overlapped: a sparse workshop entry carrying only a
+    # booktitle scored 40 after the workshop penalty, while an @article with no
+    # journal at all -- a preprint by every reading -- scored 48. `bib_edit`
+    # compares ranks and nothing else, so it preferred the preprint.
+    #
+    # Clamping against `is_preprint` also makes the two functions agree by
+    # construction rather than by two sets of rules being kept in step by hand,
+    # which is the maintenance cost that would eventually be paid in a wrong CV.
+    if is_preprint(entry):
+        return min(score, _PUBLISHED_SCORE - 1)
+    return max(score, _PUBLISHED_SCORE)
 
 
 def is_preprint(entry):
-    """True if the entry describes a preprint rather than a published version."""
+    """True if the entry describes a preprint rather than a published version.
+
+    Venue name before entry type, for the reason `publication_rank` gives: the type
+    is whichever one the source chose, and the sources disagree. Reading the type
+    first made this function contradict `publication_rank` on the same entry -- an
+    @inproceedings whose only venue was "ArXiv preprint" was a preprint by rank and
+    not a preprint here, and the two are used side by side in `dedupe_entries`.
+    """
     etype = str(entry.get("type", "")).lower()
     content = entry.get("content", "") or ""
-    if etype in _PUBLISHED_TYPES or extract_field(content, "booktitle"):
+    journal = extract_field(content, "journal")
+    if extract_field(content, "booktitle"):
+        return False
+    if journal and _PREPRINT_JOURNAL_RE.search(journal):
+        return True
+    if etype in _PUBLISHED_TYPES:
         return False
     if etype == "article":
-        journal = extract_field(content, "journal")
-        return bool(journal and _PREPRINT_JOURNAL_RE.search(journal)) or not journal
+        return not journal
     if etype in _PREPRINT_TYPES:
         return True
     return bool(re.search(r'\b(archiveprefix|eprint)\s*=', content, re.IGNORECASE))

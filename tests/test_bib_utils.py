@@ -367,3 +367,142 @@ def test_the_same_problem_is_reported_once_per_run(table_problems, capsys):
     out = capsys.readouterr().out
     assert out.count("two rows share a bib key") == 1
     assert "row 12 has no year" in out
+
+
+# ── publication_rank: venue tiers ────────────────────────────────────────────
+
+def _entry(etype, **fields):
+    return {"type": etype,
+            "content": "".join(f"  {k} = {{{v}}},\n" for k, v in fields.items())}
+
+
+_CONF = _entry("inproceedings", booktitle="Proceedings of the 62nd Annual Meeting of the ACL",
+               doi="10.18653/a", publisher="ACL", pages="1--9")
+_FINDINGS = _entry("inproceedings", booktitle="Findings of the Association for Computational Linguistics: ACL 2025",
+                   doi="10.18653/y", publisher="ACL", pages="1--9")
+_WORKSHOP = _entry("inproceedings", booktitle="Proceedings of the 10th Workshop on Swiss Text Analytics",
+                   doi="10.18653/x", publisher="ACL", pages="1--9")
+_TACL = _entry("article", journal="Transactions of the ACL", doi="10.1162/x",
+               pages="1--9", volume="12")
+_JMLR_SPARSE = _entry("article", journal="Journal of Machine Learning Research",
+                      volume="25", pages="1--40")
+_PREPRINT = _entry("article", journal="ArXiv preprint", volume="abs/2203.15556")
+
+
+def test_a_conference_outranks_a_workshop():
+    """Both are @inproceedings with a booktitle, DOI, publisher and pages, so
+    before the tier existed they scored identically and the tie-break fell to
+    whichever record the source returned first."""
+    assert publication_rank(_CONF) > publication_rank(_WORKSHOP)
+
+
+def test_findings_is_not_treated_as_a_workshop():
+    """Findings is a main-track-adjacent archival venue, not a workshop. Ranking it
+    as one would put a Findings paper below a genuine workshop paper."""
+    assert publication_rank(_FINDINGS) == publication_rank(_CONF)
+    assert publication_rank(_FINDINGS) > publication_rank(_WORKSHOP)
+
+
+def test_a_journal_outranks_a_workshop_even_with_a_sparser_record():
+    """The tier has to dominate record completeness. A JMLR entry carrying only a
+    volume and pages must still beat a workshop entry that happens to also have a
+    DOI and a publisher -- otherwise the tie-break is scoring how complete the
+    metadata is rather than how strong the venue is."""
+    assert publication_rank(_TACL) > publication_rank(_WORKSHOP)
+    assert publication_rank(_JMLR_SPARSE) > publication_rank(_WORKSHOP)
+
+
+def test_a_journal_is_credited_for_its_journal_name():
+    """An @article cannot carry a booktitle, so crediting only booktitles docked
+    every journal against every conference paper."""
+    bare = _entry("article", journal="Transactions of the ACL")
+    assert publication_rank(bare) > publication_rank(_PREPRINT)
+
+
+def test_a_preprint_journal_is_not_venue_evidence():
+    """`journal = {ArXiv preprint}` is the absence of a venue, not evidence of one."""
+    assert publication_rank(_PREPRINT) < publication_rank(_JMLR_SPARSE)
+    assert publication_rank(_PREPRINT) < publication_rank(_WORKSHOP)
+
+
+def test_a_workshop_still_outranks_every_preprint():
+    """A workshop paper is a real publication. The tier only decides between two
+    records of the same paper; it must never send one back to preprint."""
+    srw = _entry("inproceedings", booktitle="Proceedings of the ACL Student Research Workshop",
+                 pages="1--5")
+    assert publication_rank(_WORKSHOP) > publication_rank(_PREPRINT)
+    assert publication_rank(srw) > publication_rank(_PREPRINT)
+    assert publication_rank(srw) > publication_rank(_entry("misc", eprint="2203.15556",
+                                                           archiveprefix="arXiv"))
+
+
+def test_a_venue_name_outranks_a_wrong_entry_type():
+    """The type is whichever the source chose, and the sources disagree. A
+    published paper arrives as @misc often enough -- an arXiv-shaped entry someone
+    pasted a booktitle into, or a source that emits @misc for everything -- and the
+    venue name is what settles it."""
+    mislabelled = _entry("misc", booktitle="Proceedings of the 62nd Annual Meeting of the ACL",
+                         pages="1--9")
+    assert publication_rank(mislabelled) > publication_rank(_PREPRINT)
+    assert publication_rank(mislabelled) >= 50
+
+
+def test_a_preprint_venue_name_outranks_a_published_entry_type():
+    """The override runs both ways. An @inproceedings whose only venue is "ArXiv
+    preprint" is a preprint, whatever its type claims."""
+    mislabelled = _entry("inproceedings", journal="ArXiv preprint", volume="abs/2203.15556")
+    assert publication_rank(mislabelled) <= publication_rank(_PREPRINT)
+    assert publication_rank(mislabelled) < publication_rank(_JMLR_SPARSE)
+
+
+def test_a_corrected_entry_still_ranks_on_its_own_evidence():
+    """The override lifts a mislabelled entry to the published floor and the
+    corroborating bonuses still apply on top, so a complete record outranks a bare
+    one. Deleting the override left both at exactly the floor, which no test noticed
+    because none of them compared two corrected entries."""
+    rich = _entry("misc", booktitle="Proceedings of the ACL", pages="1--9")
+    bare = _entry("misc", booktitle="Proceedings of the ACL")
+    assert publication_rank(rich) > publication_rank(bare)
+
+
+def test_the_override_does_not_invent_a_stronger_venue():
+    """It corrects a mislabelled type up to the published floor and no further, so
+    a bare @misc with a booktitle cannot outrank a full conference record."""
+    bare = _entry("misc", booktitle="Proceedings of the 62nd Annual Meeting of the ACL")
+    assert publication_rank(bare) < publication_rank(_CONF)
+
+
+def test_is_preprint_and_publication_rank_never_disagree():
+    """They are used side by side in dedupe_entries, so a case where one calls an
+    entry a preprint and the other calls it published silently picks a winner by
+    whichever key the sort reached first. Reading the entry type before the venue
+    name is what made them diverge."""
+    cases = [
+        _entry("inproceedings", journal="ArXiv preprint", volume="abs/1"),
+        _entry("misc", booktitle="Proceedings of the ACL", pages="1--9"),
+        _entry("article", journal="Transactions of the ACL", volume="12"),
+        _entry("article", volume="1"),
+        _entry("misc", eprint="1", archiveprefix="arXiv"),
+        _CONF, _FINDINGS, _WORKSHOP, _TACL, _JMLR_SPARSE, _PREPRINT,
+    ]
+    sparse_workshop = _entry("inproceedings", booktitle="NeurIPS 2025 LLM Evaluation Workshop")
+    no_journal = _entry("article", volume="1")
+    # The case that actually needs the preprint side of the clamp: an @article with
+    # no journal is a preprint, but a complete record of one -- DOI, publisher,
+    # pages, volume -- collects 23 points of corroborating evidence and reaches 68
+    # unclamped, above the 50 a sparse workshop paper scores. Without this entry in
+    # the list, deleting the clamp changed no test result.
+    rich_preprint = _entry("article", doi="10.1/x", publisher="ACM",
+                           pages="1--9", volume="12")
+    cases += [sparse_workshop, no_journal, rich_preprint]
+
+    published = [e for e in cases if not is_preprint(e)]
+    preprints = [e for e in cases if is_preprint(e)]
+    assert published and preprints
+    # The property that matters, rather than a shared numeric threshold: the two
+    # bands must not overlap. `bib_edit` compares ranks and nothing else, so an
+    # overlap means it can prefer a preprint over a published paper -- which it did,
+    # for the two entries added just above: a sparse workshop record scored 40 and
+    # an @article with no journal scored 48.
+    assert min(publication_rank(e) for e in published) \
+        > max(publication_rank(e) for e in preprints)

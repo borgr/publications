@@ -7,10 +7,16 @@ yet, fetch the best available BibTeX. Sources in descending preference:
   1. DBLP title search   published @inproceedings/@article, gated on a 0.72
                          title-similarity check so DBLP returning a different
                          paper cannot overwrite a good entry
+  1b. PMLR landing page  when step 1's answer is a PMLR paper, the publisher's
+                         own entry replaces DBLP's rendering of it -- the two
+                         disagree on titles (XTREME is "Generalisation" in the
+                         proceedings and "Generalization" on DBLP and arXiv).
   2. S2 externalIds      the ACL Anthology or OpenReview record. Also the
                          identifier crosswalk -- one response carries ArXiv,
                          DOI, ACL, DBLP and CorpusId together
-  3. DOI via clibib      optional, identifier-only. Covers DOI-bearing records
+  3. DOI, identifier-only via clibib when it is installed, otherwise via Crossref
+                         content negotiation, which needs nothing beyond curl. Covers
+                         DOI-bearing records
                          that DBLP and the ACL Anthology do not index
                          (journals, book chapters). Never used for title search
   4. OpenAlex            keyless, and indexes journals and preprints the earlier
@@ -27,11 +33,13 @@ nothing here writes to the bibliography.
 Usage:
     python resolve_arxiv.py [--bib orig.bib] [--output resolved.bib] [--skip-missing]
 
-Dependencies: beautifulsoup4, curl. Optionally clibib, for the DOI path.
+Dependencies: beautifulsoup4, curl. clibib is optional -- without it the DOI
+rung uses Crossref rather than disappearing.
 """
 
 import argparse
 import difflib
+import html
 import json
 import os
 import re
@@ -116,6 +124,12 @@ def _note_unanswered(what: str) -> None:
           f"not as 'unpublished'", end="", flush=True)
 
 
+def _spacing_for(host: str) -> float:
+    """How far apart requests to `host` are spaced. Measured hosts get their own
+    number; everything else gets the default."""
+    return _DBLP_SPACING_SECONDS if host.endswith(_DBLP_HOST) else _DEFAULT_SPACING_SECONDS
+
+
 def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
     """GET a URL's body, or None when the request could not be answered.
 
@@ -137,7 +151,7 @@ def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
         return None
     refused = False
     for attempt in range(tries):
-        _wait_turn(host, _DEFAULT_SPACING_SECONDS)
+        _wait_turn(host, _spacing_for(host))
         replied, body = False, ""
         try:
             result = subprocess.run(
@@ -162,7 +176,7 @@ def _curl_get(url: str, accept=None, tries: int = _CURL_TRIES) -> str | None:
         # Every later paper would otherwise spend three more requests and six more
         # seconds being told the same no. Over a full run that is most of the
         # requests going to a source that has already stopped answering.
-        _pause_host(host, _DEFAULT_COOLDOWN_SECONDS, _DEFAULT_SPACING_SECONDS)
+        _pause_host(host, _DEFAULT_COOLDOWN_SECONDS, _spacing_for(host))
         print(f"\n    {host} kept refusing — pausing it for "
               f"{_DEFAULT_COOLDOWN_SECONDS}s", end="", flush=True)
     _note_unanswered(host)
@@ -204,6 +218,17 @@ _S2_SPACING_SECONDS = 1.2
 _S2_SPACING_SECONDS_ANON = 3.0
 _S2_COOLDOWN_SECONDS = 60
 _S2_COOLDOWN_SECONDS_ANON = 120
+
+# DBLP does not publish a rate limit either, but unlike the others it has been
+# measured refusing: at ~1.2s spacing it answered three title searches, returned
+# 429, and then closed connections without replying for some minutes. That is the
+# S2 standard applied to a second host -- a number from this pipeline's own
+# experience rather than one invented here. The adaptive doubling below would find
+# this pace on its own, but only by spending a refusal and a cooldown first, and a
+# host in cooldown makes step 1 silent, which drops every paper in that window to a
+# lower rung.
+_DBLP_HOST = "dblp.org"
+_DBLP_SPACING_SECONDS = 3.0
 
 # What every other host gets. A single default rather than a table per source:
 # none of the others publishes a rate limit, so any per-host number would be
@@ -513,7 +538,18 @@ def search_dblp(title: str) -> list[str] | None:
     with an empty body. `None` means DBLP refused to answer, which says nothing
     about the paper and must not be read as `[]`.
     """
-    url = f"https://dblp.org/search/publ/api?q={quote(title)}&format=bib&h=5"
+    # h is how many hits DBLP returns, not how many requests this makes, so the
+    # only cost of raising it is response bytes. It has to be large enough that
+    # every *version* of one paper fits -- preprint, conference, journal, extended
+    # -- because pick_published chooses between them, and a published version that
+    # fell outside the window looks exactly like a paper that was never published.
+    # Seen at h=5: the XTREME query returned five near-title matches before either
+    # the ICML or the CoRR record appeared. 20 is well inside DBLP's own ceiling of
+    # 1000. Extra hits cannot lower precision much, since every candidate still has
+    # to pass titles_agree individually, but they do give a same-year paper with a
+    # near-identical title more chances to be offered, which is why this is 20 and
+    # not 200.
+    url = f"https://dblp.org/search/publ/api?q={quote(title)}&format=bib&h=20"
     # An HTML body is DBLP's rate-limit page, served with status 200. Rejecting it
     # here makes _curl_get retry it and, if it persists, report no answer.
     raw = _curl_get(url, accept=lambda body: not body.lstrip().startswith("<"))
@@ -748,10 +784,95 @@ def query_s2_by_title(title: str, year: str = "") -> dict | None:
 # ── ACL Anthology ─────────────────────────────────────────────────────────────
 
 def fetch_acl_bib(acl_id: str, original_key: str) -> str | None:
+    """Deliberately *not* given an `accept` predicate, unlike the PMLR fetcher.
+
+    The two look like the same situation and are not. A PMLR URL comes from DBLP's
+    own `ee` field for a record it has already matched, so a page that does not
+    yield an entry means PMLR changed its markup -- a source problem, worth
+    counting as "no answer" so it eventually alerts. An ACL id comes from Semantic
+    Scholar, which supplies wrong ones, and the Anthology answers a wrong id with a
+    404 *body* and status 200. Treating that as "no answer" would keep step 3
+    permanently incomplete over a bad identifier and eventually alert about a
+    source that is working fine.
+
+    So: unrecognised body here means "that id was wrong, try the next rung", and
+    the caller's `_this_paper` check is what guards it.
+    """
     bib = _curl_get(f"https://aclanthology.org/{acl_id}.bib")
     if not bib or not bib.strip().startswith("@"):
         return None
     return _replace_key(bib.strip(), original_key)
+
+
+# ── PMLR (ICML, AISTATS, CoLLAs, …) ───────────────────────────────────────────
+
+# DBLP's `ee` for a PMLR paper is its landing page, e.g.
+# http://proceedings.mlr.press/v119/hu20b.html
+_PMLR_URL_RE = re.compile(r'https?://(?:proceedings\.)?mlr\.press/v\d+/[A-Za-z0-9._-]+\.html', re.I)
+
+# Every PMLR landing page carries the publisher's own entry inline, as
+# <code class="citecode" id="bibtex">@InProceedings{...}</code>. HTML-escaped.
+_PMLR_BIB_RE = re.compile(r'id="bibtex"[^>]*>(.*?)</code>', re.S)
+
+
+def _drop_field(bibtex: str, field: str) -> str:
+    """Remove one field, brace-counting its value rather than matching to a comma.
+
+    PMLR ships the full abstract inside the entry, and an abstract contains
+    commas, braces and line breaks. A regex that stops at the first comma
+    truncates it and leaves the remainder as stray text inside the entry.
+    """
+    m = re.search(r'\n\s*' + field + r'\s*=\s*', bibtex, re.IGNORECASE)
+    if not m:
+        return bibtex
+    i = m.end()
+    if i >= len(bibtex) or bibtex[i] != '{':
+        return bibtex
+    depth = 0
+    for j in range(i, len(bibtex)):
+        if bibtex[j] == '{':
+            depth += 1
+        elif bibtex[j] == '}':
+            depth -= 1
+            if depth == 0:
+                end = j + 1
+                if end < len(bibtex) and bibtex[end] == ',':
+                    end += 1
+                return bibtex[:m.start()] + bibtex[end:]
+    return bibtex
+
+
+def pmlr_url_in(bibtex: str) -> str | None:
+    """The PMLR landing page a resolved entry points at, if any."""
+    m = _PMLR_URL_RE.search(bibtex or "")
+    return m.group(0) if m else None
+
+
+def fetch_pmlr_bib(page_url: str, original_key: str) -> str | None:
+    """The publisher's entry for a PMLR paper, in place of DBLP's rendering.
+
+    Worth the extra request because the two disagree on the title: DBLP carries
+    XTREME as "...Evaluating Cross-lingual Generalization", PMLR -- the version of
+    record -- as "Generalisation". Whichever we print, it should be the one the
+    proceedings printed.
+    """
+    # The bibtex block is required for the page to count as an answer, so PMLR
+    # changing its markup registers as "this source did not reply" rather than as
+    # "this paper has no PMLR entry". The difference matters: the second is silent
+    # -- resolution just falls back to DBLP's rendering forever -- while the first
+    # is counted, keeps step 3 from being marked done, and eventually trips the
+    # 30-day alert in update.py.
+    page = _curl_get(page_url, accept=lambda body: bool(_PMLR_BIB_RE.search(body)))
+    if not page:
+        return None
+    m = _PMLR_BIB_RE.search(page)
+    if not m:
+        return None
+    bib = html.unescape(m.group(1)).strip()
+    if not bib.startswith("@"):
+        return None
+    bib = _drop_field(bib, "abstract")
+    return _replace_key(bib, original_key)
 
 
 # ── OpenReview ────────────────────────────────────────────────────────────────
@@ -948,6 +1069,39 @@ def _clibib_fetch():
     return _CLIBIB_STATE["fn"]
 
 
+def fetch_by_doi_crossref(doi: str, original_key: str, expected_title: str,
+                          expected_year: int | None = None) -> str | None:
+    """A DOI to BibTeX through Crossref content negotiation. None on any failure.
+
+    Registrar-agnostic, so one fetcher covers AAAI, ACM, IEEE and Springer rather
+    than a landing-page scraper each. AAAI is the case that motivated it: its OJS
+    pages advertise a BibTeX export, but that route answers a scripted request
+    with an empty reply, while `Accept: application/x-bibtex` on the DOI returns
+    the record.
+
+    Guarded by the same title check as the clibib path, and for the same reason: a
+    DOI can be wrong, and what comes back for a wrong DOI is a real, well-formed
+    entry for somebody else's paper.
+
+    Two shapes to know about in what Crossref returns. AAAI's own metadata models
+    its proceedings as a journal, so an AAAI paper arrives as an `@article` with
+    `journal = {Proceedings of the AAAI Conference on Artificial Intelligence}` --
+    publication_rank scores that as published, which is the answer that matters.
+    And the entry is emitted on one line ending `pages={x--y} }`, a brace style
+    some BibTeX parsers close early; ours counts braces, so it round-trips.
+    """
+    if not doi:
+        return None
+    bib = _curl_get(f"https://doi.org/{quote(doi, safe='/')}",
+                    accept=lambda body: body.lstrip().startswith("@"))
+    if not bib or not bib.strip().startswith("@"):
+        return None
+    if not titles_agree(expected_title, _dblp_title(bib),
+                        expected_year, _bib_year(bib)):
+        return None
+    return _replace_key(bib.strip(), original_key)
+
+
 def fetch_by_doi(doi: str, original_key: str, expected_title: str,
                  expected_year: int | None = None) -> str | None:
     """Resolve a DOI to BibTeX via clibib. Returns None on any failure.
@@ -965,9 +1119,17 @@ def fetch_by_doi(doi: str, original_key: str, expected_title: str,
     wrong: it can come from a bib entry a human pasted, or from a store record a
     previous version of this code already poisoned.
     """
-    fetch = _clibib_fetch()
-    if not fetch or not doi:
+    if not doi:
         return None
+    fetch = _clibib_fetch()
+    if not fetch:
+        # clibib is optional and often absent, and without it this whole rung
+        # disappeared -- so a DOI-bearing venue that neither DBLP nor the
+        # Anthology indexes resolved to a preprint despite the pipeline holding an
+        # exact identifier for it. Crossref answers the same question over plain
+        # content negotiation, with no dependency beyond the curl already here.
+        return fetch_by_doi_crossref(doi, original_key, expected_title,
+                                     expected_year)
     try:
         bib = fetch(doi)
     except Exception:
@@ -1115,6 +1277,13 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
             dblp_results, query_title=title, query_year=query_year)
         if published_bib:
             _remember(**harvest_ids_from_bibtex(published_bib))
+            # DBLP found it; if the version of record is on PMLR, print the
+            # publisher's entry instead of DBLP's rendering of it.
+            pmlr_url = pmlr_url_in(published_bib)
+            if pmlr_url:
+                pmlr_bib = fetch_pmlr_bib(pmlr_url, original_key)
+                if _this_paper(pmlr_bib):
+                    return pmlr_bib, "PMLR"
             return _replace_key(published_bib, original_key), "DBLP"
 
     # Step 2 — S2 to get ACL / OpenReview IDs

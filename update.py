@@ -698,6 +698,13 @@ def step7_push(dry_run: bool) -> bool:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+# How long a resolve step may fail to complete before it stops being a bad night
+# and becomes a bad month. Roughly four consecutive weekly runs: long enough that
+# a flaky fortnight stays quiet, short enough that a dead source is not cited as
+# fact for a whole publication cycle.
+_RESOLVE_SILENCE_ALERT_DAYS = 30
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(
         description="Update the publications pipeline end-to-end",
@@ -785,6 +792,7 @@ Companion commands, none needed routinely:
 
     # Step 1 — re-fetch when the recorded fetch has aged out. Time-based rather
     # than content-based: the whole point is to notice that the *remote* changed.
+    resolve_silent_days = 0
     fetch_problem = None
     fetch_age = state.age_hours("fetch")
     print("[Step 1] Fetching Scholar profile")
@@ -845,6 +853,19 @@ Companion commands, none needed routinely:
             if silent:
                 print(f"  Not recording step 3 as done: {silent} lookup(s) got no "
                       f"answer, so the next run asks again.")
+                # Retrying is right for a bad night and wrong for a bad month. A
+                # source that has stopped answering for good produces this same
+                # line every run, and the run still exits 0, so nothing ever says
+                # so: resolution keeps falling through to lower rungs and the CV
+                # keeps citing preprints that have since been published.
+                #
+                # No new state for this. The age of step 3's last success is
+                # already recorded, and it is exactly the question -- how long has
+                # this been failing -- so the alert is that age crossing a
+                # threshold. It clears itself the first time a run completes.
+                if (state.ever_completed("resolve")
+                        and state.age_hours("resolve") / 24 >= _RESOLVE_SILENCE_ALERT_DAYS):
+                    resolve_silent_days = int(state.age_hours("resolve") / 24)
             else:
                 state.mark_done("resolve", STEP_INPUTS["resolve"],
                                 STEP_OUTPUTS["resolve"])
@@ -913,6 +934,15 @@ Companion commands, none needed routinely:
             f"on disk, so the CV is correct except for citation counts, which are "
             f"as of the last successful fetch. Re-run `python update.py --force` "
             f"from a different network if Scholar is serving a CAPTCHA."))
+    if resolve_silent_days:
+        failures.append((
+            "Publications pipeline has not completed a resolve step in "
+            f"{resolve_silent_days} days.",
+            "A source has been refusing or timing out on every run for that long, "
+            "so papers are resolving to preprints instead of to the venues that "
+            "published them, and each run retries and exits 0. Check DBLP and "
+            "Semantic Scholar by hand, and whether an S2 API key is set. This "
+            "alert clears itself as soon as one run finishes asking."))
     if not push_ok:
         failures.append((
             "Publications pipeline could not push.",

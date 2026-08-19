@@ -680,11 +680,29 @@ def test_a_paused_source_is_an_unanswered_lookup_not_an_empty_result(monkeypatch
 def test_curl_requests_to_one_host_are_spaced_out(monkeypatch):
     calls = _curl_returning(monkeypatch, _Result(0, "@article{a,}"))
     slept = _timeline(monkeypatch)
-    ra._curl_get("https://dblp.org/x")
+    ra._curl_get("https://openalex.example/x")
     assert slept == [], "the first request to a host has nothing to wait for"
-    ra._curl_get("https://dblp.org/y")
+    ra._curl_get("https://openalex.example/y")
     assert slept == [ra._DEFAULT_SPACING_SECONDS]
     assert len(calls) == 2
+
+
+def test_dblp_is_paced_more_slowly_than_the_default(monkeypatch):
+    """DBLP has been measured refusing at the default pace, so it gets its own
+    number. A refusal is not free: it puts the host in cooldown, and a silent step
+    1 drops every paper in that window to a lower rung."""
+    _curl_returning(monkeypatch, _Result(0, "@article{a,}"))
+    slept = _timeline(monkeypatch)
+    ra._curl_get("https://dblp.org/x")
+    ra._curl_get("https://dblp.org/y")
+    assert slept == [ra._DBLP_SPACING_SECONDS]
+    assert ra._DBLP_SPACING_SECONDS > ra._DEFAULT_SPACING_SECONDS
+
+
+def test_only_the_measured_hosts_get_their_own_pace():
+    assert ra._spacing_for("dblp.org") == ra._DBLP_SPACING_SECONDS
+    assert ra._spacing_for("aclanthology.org") == ra._DEFAULT_SPACING_SECONDS
+    assert ra._spacing_for("proceedings.mlr.press") == ra._DEFAULT_SPACING_SECONDS
 
 
 def test_curl_pacing_is_per_host(monkeypatch):
@@ -1059,6 +1077,121 @@ def test_an_acl_404_page_is_rejected(monkeypatch):
 def test_an_empty_acl_response_is_rejected(monkeypatch):
     curl(monkeypatch, {})
     assert ra.fetch_acl_bib("nope", "k") is None
+
+
+# ── PMLR ─────────────────────────────────────────────────────────────────────
+
+_PMLR_PAGE = (
+    '<div><code class="citecode" id="bibtex">@InProceedings{pmlr-v119-hu20b,\n'
+    '  title = \t {{XTREME}: Evaluating Cross-lingual Generalisation},\n'
+    '  booktitle = \t {Proceedings of the 37th International Conference on Machine Learning},\n'
+    '  publisher = {PMLR},\n'
+    '  abstract = \t {Much recent progress, driven by benchmarks {nested}, and a comma.}\n'
+    '}</code></div>'
+)
+
+
+def test_a_pmlr_url_is_found_in_a_dblp_entry():
+    assert ra.pmlr_url_in("  ee = {http://proceedings.mlr.press/v119/hu20b.html},") \
+        == "http://proceedings.mlr.press/v119/hu20b.html"
+    assert ra.pmlr_url_in("  ee = {https://arxiv.org/abs/2003.11080},") is None
+
+
+def test_a_pmlr_entry_is_refiled_under_our_key(monkeypatch):
+    curl(monkeypatch, {"proceedings.mlr.press": _PMLR_PAGE})
+    bib = ra.fetch_pmlr_bib("http://proceedings.mlr.press/v119/hu20b.html", "ours2020xtreme")
+    assert bib.startswith("@InProceedings{ours2020xtreme,")
+    assert "pmlr-v119-hu20b" not in bib
+
+
+def test_the_pmlr_abstract_is_dropped_whole(monkeypatch):
+    """PMLR ships the abstract inside the entry. It contains braces and commas, so
+    a comma-terminated regex would truncate it and leave the tail as stray text."""
+    curl(monkeypatch, {"proceedings.mlr.press": _PMLR_PAGE})
+    bib = ra.fetch_pmlr_bib("http://proceedings.mlr.press/v119/hu20b.html", "k")
+    assert "abstract" not in bib.lower()
+    assert "and a comma" not in bib
+    assert bib.rstrip().endswith("}")
+    assert "{PMLR}" in bib
+
+
+def test_the_publisher_title_survives_html_escaping(monkeypatch):
+    curl(monkeypatch, {"proceedings.mlr.press":
+                       '<code class="citecode" id="bibtex">@InProceedings{x,\n'
+                       '  title = {A &amp; B}\n}</code>'})
+    bib = ra.fetch_pmlr_bib("http://proceedings.mlr.press/v1/a.html", "k")
+    assert "A & B" in bib
+
+
+def test_a_pmlr_page_without_an_entry_is_rejected(monkeypatch):
+    curl(monkeypatch, {"proceedings.mlr.press": "<html>no bibtex here</html>"})
+    assert ra.fetch_pmlr_bib("http://proceedings.mlr.press/v1/a.html", "k") is None
+
+
+def test_an_empty_pmlr_response_is_rejected(monkeypatch):
+    curl(monkeypatch, {})
+    assert ra.fetch_pmlr_bib("http://proceedings.mlr.press/v1/a.html", "k") is None
+
+
+# ── Crossref (the DOI rung without clibib) ───────────────────────────────────
+
+_CROSSREF_ENTRY = (
+    " @article{Zhang_2026, title={How Does Alignment Enhance Multilingual "
+    "Capabilities}, journal={Proceedings of the AAAI Conference on Artificial "
+    "Intelligence}, author={Zhang, Shimao}, year={2026}, pages={34799\u201334807} }"
+)
+
+
+def test_a_crossref_entry_is_refiled_under_our_key(monkeypatch):
+    curl(monkeypatch, {"doi.org": _CROSSREF_ENTRY})
+    bib = ra.fetch_by_doi_crossref("10.1609/aaai.v40i41.40782", "ours2026alignment",
+                                   "How Does Alignment Enhance Multilingual Capabilities",
+                                   2026)
+    assert bib.startswith("@article{ours2026alignment,")
+    assert "Zhang_2026" not in bib
+
+
+def test_crossref_is_guarded_by_the_title(monkeypatch):
+    """A DOI can be wrong -- pasted, or crosswalked from a bad title search -- and
+    what comes back for a wrong DOI is a real, well-formed entry for someone
+    else's paper. This is the rung where that stops."""
+    curl(monkeypatch, {"doi.org": _CROSSREF_ENTRY})
+    assert ra.fetch_by_doi_crossref("10.1/x", "k",
+                                    "Global Burden of 292 Causes of Death", 2020) is None
+
+
+def test_a_non_bibtex_crossref_body_is_rejected(monkeypatch):
+    curl(monkeypatch, {"doi.org": "<!DOCTYPE html><html>Not found"})
+    assert ra.fetch_by_doi_crossref("10.1/x", "k", "A Paper") is None
+
+
+def test_an_empty_crossref_response_is_rejected(monkeypatch):
+    curl(monkeypatch, {})
+    assert ra.fetch_by_doi_crossref("10.1/x", "k", "A Paper") is None
+
+
+def test_no_doi_asks_crossref_nothing(monkeypatch):
+    curl(monkeypatch, {"doi.org": pytest.fail})
+    assert ra.fetch_by_doi_crossref("", "k", "A Paper") is None
+
+
+def test_no_doi_short_circuits_before_either_backend(monkeypatch):
+    """Checked before clibib is even imported, so an empty DOI cannot reach a
+    network call through either backend."""
+    monkeypatch.setattr(ra, "_clibib_fetch", lambda: pytest.fail("asked clibib"))
+    monkeypatch.setattr(ra, "fetch_by_doi_crossref",
+                        lambda *a, **k: pytest.fail("asked Crossref"))
+    assert ra.fetch_by_doi("", "k", "A Paper") is None
+
+
+def test_pmlr_markup_drift_counts_as_no_answer(monkeypatch):
+    """If PMLR restyles its pages the entry stops being found. That must register as
+    a source that did not reply -- counted, and eventually alerted on -- rather than
+    as this paper simply having no PMLR record, which would degrade in silence."""
+    curl(monkeypatch, {"proceedings.mlr.press": "<html>restyled, no citecode</html>"})
+    before = ra.unanswered_lookups()
+    assert ra.fetch_pmlr_bib("http://proceedings.mlr.press/v1/a.html", "k") is None
+    assert ra.unanswered_lookups() > before
 
 
 # ── OpenReview ───────────────────────────────────────────────────────────────

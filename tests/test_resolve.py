@@ -105,12 +105,39 @@ def test_title_is_never_passed_to_clibib(monkeypatch):
     assert seen == [], f"clibib was called with a non-identifier: {seen}"
 
 
-def test_doi_lookup_is_skipped_when_clibib_is_absent(monkeypatch):
-    """clibib is optional; without it the resolver behaves as it did before."""
+def test_doi_lookup_falls_back_to_crossref_when_clibib_is_absent(monkeypatch):
+    """clibib is optional and usually absent. It used to take the whole DOI rung
+    with it, so a DOI-bearing venue that neither DBLP nor the Anthology indexes
+    resolved to a preprint while the pipeline held an exact identifier for it."""
     monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
     monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
     monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t, y=None: None)
     monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: None)
+    asked = []
+
+    def _crossref(doi, key, title, year=None):
+        asked.append(doi)
+        return f"@article{{{key}, title = {{A Paper With Quite A Long Title Here}} }}"
+
+    monkeypatch.setattr(resolve_arxiv, "fetch_by_doi_crossref", _crossref)
+    store = IdentityStore()
+    store.record("k1", doi="10.1/x")
+    bib, source = resolve("A Paper With Quite A Long Title Here", None, "k1", "",
+                          store=store)
+    assert asked == ["10.1/x"]
+    assert "A Paper With Quite A Long Title Here" in bib
+
+
+def test_the_ladder_ends_as_before_when_crossref_has_nothing(monkeypatch):
+    """The addition must not be able to change the outcome when it contributes
+    nothing: with every rung closed and Crossref empty, resolution reports exactly
+    what it reported before this rung existed."""
+    monkeypatch.setattr(resolve_arxiv, "search_dblp", lambda t: [])
+    monkeypatch.setattr(resolve_arxiv, "query_s2_by_title", lambda t, y="": None)
+    monkeypatch.setattr(resolve_arxiv, "search_openalex", lambda t, y=None: None)
+    monkeypatch.setattr(resolve_arxiv, "_clibib_fetch", lambda: None)
+    monkeypatch.setattr(resolve_arxiv, "fetch_by_doi_crossref",
+                        lambda d, k, t, y=None: None)
     store = IdentityStore()
     store.record("k1", doi="10.1/x")
     bib, source = resolve("A Paper With Quite A Long Title Here", None, "k1", "",
@@ -322,6 +349,10 @@ def ladder(monkeypatch):
         "search_openalex": lambda t, y=None: None,
         "fetch_arxiv_bib": lambda a, k, known_title=None: f"@misc{{{k}, arxiv}}",
         "_clibib_fetch": lambda: None,
+        # Closed like every other rung. It is reached whenever clibib is absent,
+        # which in tests is always, so leaving it open would send the suite to
+        # doi.org and conftest would fail it as an unstubbed network call.
+        "fetch_by_doi_crossref": lambda d, k, t, y=None: None,
     }
     for name, stub in closed.items():
         monkeypatch.setattr(resolve_arxiv, name, stub)

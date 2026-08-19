@@ -214,6 +214,21 @@ class PipelineState:
 
     # ── age, for the time-based fetch check ──────────────────────────────────
 
+    def ever_completed(self, step):
+        """Whether the step has a recorded successful run at all.
+
+        Separate from `age_hours`, which reports inf for both "never ran" and
+        "ran a very long time ago". A first run on a fresh clone must not be able
+        to trip an alert whose whole meaning is "this used to work and stopped".
+
+        Note the interaction with VERSION: bumping it discards the recorded state,
+        so this reports False again and any alert built on it stays quiet until one
+        run completes. That is the right direction to fail -- a schema change
+        should not manufacture an alert -- but it does mean a real outage spanning
+        a version bump is reported late rather than immediately.
+        """
+        return bool((self.steps.get(step) or {}).get("completed_epoch"))
+
     def age_hours(self, step):
         """Hours since the step last completed, or inf if it never has.
 
