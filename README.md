@@ -594,3 +594,10 @@ remote has moved — because you edited the project in Overleaf's own editor —
 push rebases onto it and retries, so that no longer needs a manual pull.
 
 Pull Overleaf-side edits back with `git -C overleaf pull origin`.
+
+## License
+
+Code is [MIT](LICENSE). The bibliography and citation data — `orig.bib`, `Wzmn.bib`,
+`citations.csv`, `papers.csv` — are
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), so reuse either with
+attribution.
