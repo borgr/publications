@@ -758,6 +758,13 @@
         "notalllayersareequallyasimportanteverylayercountsbert"
       ]
     },
+    "cheng2026skill": {
+      "arxiv": "2608.25832",
+      "s2": "291371154",
+      "titles": [
+        "skillissueareskillslanguageinvariantinllms"
+      ]
+    },
     "choshen2024hitchhiker": {
       "scholar_id": "8b8IhUYAAAAJ:4OULZ7Gr8RgC",
       "titles": [
@@ -814,6 +821,14 @@
       "scholar_id": "8b8IhUYAAAAJ:XiVPGOgt02cC",
       "titles": [
         "mediocrityisthekeyforllmasajudgeanchorselection"
+      ]
+    },
+    "donyehiya2026user": {
+      "arxiv": "2609.02859",
+      "s2": "291615425",
+      "scholar_id": "8b8IhUYAAAAJ:LI9QrySNdTsC",
+      "titles": [
+        "userfeedbackprovidesauniquesignalthatllmscannotdetect"
       ]
     },
     "dubey2024llama": {
@@ -1151,6 +1166,12 @@
       "scholar_id": "8b8IhUYAAAAJ:cFHS6HbyZ2cC",
       "titles": [
         "zipnnlosslesscompressionforaimodels"
+      ]
+    },
+    "zouhar2026last": {
+      "scholar_id": "8b8IhUYAAAAJ:lmc2jWPfTJgC",
+      "titles": [
+        "lasttranslationbenchmark"
       ]
     }
   }
