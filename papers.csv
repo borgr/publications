@@ -85,7 +85,7 @@ Time of publish ID,"Warning, incomplete?",Venue,Name,Bib,Authors,year,NLP,Small 
 ,,Nature Machine Intelligence^ ,The Future of Open Human Feedback,DonYehiya2024TheFO,"Many authors, led by me.",2024,1,,,,,1,,,,,,,,1,,1,1,1,,1,,1,,,,,
 ,,CoLM,Unforgettable Generalization in Language Models,zhang2024unforgettable,"Eric Zhang, Leshem Chosen, Jacob Andreas",2024,1,,,,,,,,1,,,1,,,,,,,,1,,,,,,,
 ,,TMLR,Compeft: Compression for communicating parameter efficient updates via sparsification and quantization,yadav2025compeft,"Prateek Yadav, Leshem Choshen, Colin Raffel, Mohit Bansal",2024,1,,,1,,,1,,1,1,,,,,,,,,1,1,,,,,,,
-,,ICLR,Model merging with SVD to tie the Knots,knots,"Pratik, Ramesh and George, Stoica and Boglarka, Ecsedi and Leshem, Choshen and Judy, Hoffman",2024,1,,,1,,,,,1,1,,1,,,,1,1,1,1,1,,,,,,,
+,,ICLR,Model merging with SVD to tie the Knots,knots,"Stoica, George and Ramesh, Pratik and Ecsedi, Boglarka and Choshen, Leshem and Hoffman, Judy",2025,1,,,1,,,,,1,1,,1,,,,1,1,1,1,1,,,,,,,
 ,,Neurips,Sloth: scaling laws for LLM skills to predict multi-benchmark performance across families,polo2024sloth,"Felipe Maia Polo, Seamus Somerstep, Leshem Choshen, Yuekai Sun, Mikhail Yurochkin",2024,1,1,,,1,,1,,1,1,,1,1,,,,1,1,1,1,,,,,,,
 ,,ICLR* ,A Hitchhiker's Guide to Scaling Law Estimation,choshen2024hitchhiker,"Leshem Choshen, Yang Zhang, Jacob Andreas",2024,1,1,,,1,,1,1,1,1,1,1,1,,,1,1,1,1,1,,,,,,,
 ,,ICLR,LiveXiv - A Multi-Modal live benchmark based on Arxiv papers content,shabtay2025livexiv,"Nimrod Shabtay, Felipe Maia Polo, Sivan Doveh, Wei Lin, Muhammad Jehanzeb Mirza, Leshem Choshen, Mikhail Yurochkin, Yuekai Sun, Assaf Arbelle, Leonid Karlinsky, Raja Giryes",2024,1,,,,,,,1,,,,,1,,,,,,,1,,,1,,,,
