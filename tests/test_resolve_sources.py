@@ -15,6 +15,7 @@ on a plane and in a fork's CI.
 import json
 import os
 import sys
+from urllib.parse import unquote_plus
 
 import pytest
 
@@ -757,14 +758,6 @@ def test_a_retitled_published_version_is_still_the_same_paper():
 
 # ── DBLP ─────────────────────────────────────────────────────────────────────
 
-def test_dblp_results_are_split_into_entries(monkeypatch):
-    curl(monkeypatch, {"dblp.org": "@article{a,\n title={A}\n}\n"
-                                   "@inproceedings{b,\n title={B}\n}\n"})
-    entries = ra.search_dblp("A Paper")
-    assert len(entries) == 2
-    assert entries[0].startswith("@article{a,")
-
-
 def test_an_html_error_page_from_dblp_is_no_answer_not_no_results(monkeypatch):
     """DBLP answers rate limiting with an HTML page and HTTP 200.
 
@@ -778,22 +771,17 @@ def test_an_html_error_page_from_dblp_is_no_answer_not_no_results(monkeypatch):
     assert ra.unanswered_lookups() == 1
 
 
-def test_an_empty_dblp_response_is_no_results(monkeypatch):
-    """DBLP answers a no-hit title search with an empty body and HTTP 200, so
-    empty really does mean "not in DBLP" -- and must not be retried or counted."""
-    curl(monkeypatch, {})
-    assert ra.search_dblp("A Paper") == []
-    assert ra.unanswered_lookups() == 0
-
-
-def test_the_title_is_url_encoded(monkeypatch):
-    """An unencoded `&` or `?` truncates the query, so DBLP searches for a
-    prefix of the title and confidently returns a different paper."""
+def test_punctuation_in_a_title_cannot_reach_the_query(monkeypatch):
+    """An unencoded `&` truncated the old search URL, and a quote would end the
+    SPARQL string literal. Only word characters go into the query, and the whole
+    query is URL-encoded."""
     seen = []
     monkeypatch.setattr(ra, "_curl_get",
-                        lambda url, **kw: seen.append(url) or "")
-    ra.search_dblp("Cause & Effect: What?")
-    assert "Cause%20%26%20Effect" in seen[0]
+                        lambda url, **kw: seen.append(url) or None)
+    ra.search_dblp('Cause & Effect: "Whatever"?')
+    query = unquote_plus(seen[0].split("query=", 1)[1])
+    assert '"whatever" .' in query and '"effect" .' in query and '"cause" .' in query
+    assert "&" not in seen[0].split("?", 1)[1]
 
 
 # ── Semantic Scholar title search ────────────────────────────────────────────
@@ -1697,3 +1685,91 @@ def test_what_the_prefetch_covered_is_reported(cli, monkeypatch, capsys):
     _tmp, bib, out = cli
     ra.main(["--bib", bib, "--output", out])
     assert "7" in capsys.readouterr().out
+
+
+# ── DBLP through SPARQL ──────────────────────────────────────────────────────
+
+def _sparql_reply(rows):
+    return json.dumps({"results": {"bindings": [
+        {k: {"value": v} for k, v in row.items()} for row in rows]}})
+
+
+_TIES = "https://dblp.org/rec/conf/nips/YadavTCRB23"
+_TIES_CORR = "https://dblp.org/rec/journals/corr/abs-2306-01708"
+
+
+@pytest.fixture
+def dblp_sparql(monkeypatch):
+    """Serve canned SPARQL replies in order, and record the queries sent."""
+    sent = []
+
+    def _install(*replies):
+        queue = list(replies)
+
+        def fake_get(url, accept=None, tries=None):
+            sent.append(url)
+            body = queue.pop(0)
+            if body is None or (accept is not None and not accept(body)):
+                return None
+            return body
+        monkeypatch.setattr(ra, "_curl_get", fake_get)
+        return sent
+    return _install
+
+
+def test_dblp_words_are_the_rarest_three_and_skip_stopwords():
+    assert ra._dblp_words("TIES-Merging: Resolving Interference When Merging Models") == \
+        ["interference", "resolving", "merging"]
+    assert ra._dblp_words("A to of") == []
+
+
+def test_dblp_search_builds_dblp_shaped_bibtex(dblp_sparql):
+    sent = dblp_sparql(
+        _sparql_reply([
+            {"pub": _TIES, "title": "TIES-Merging: Resolving Interference When Merging Models.",
+             "btype": "http://purl.org/net/nknouf/ns/bibtex#Inproceedings", "year": "2023",
+             "proc": "Advances in Neural Information Processing Systems 36.",
+             "url": "http://papers.nips.cc/x.html"},
+            {"pub": _TIES_CORR, "title": "Resolving Interference When Merging Models.",
+             "btype": "http://purl.org/net/nknouf/ns/bibtex#Article", "year": "2023",
+             "journal": "CoRR", "volume": "abs/2306.01708",
+             "doi": "https://doi.org/10.48550/ARXIV.2306.01708"}]),
+        _sparql_reply([
+            {"pub": _TIES, "ord": "2", "name": "Derek Tam"},
+            {"pub": _TIES, "ord": "1", "name": "Prateek Yadav"},
+            {"pub": _TIES_CORR, "ord": "1", "name": "Wei Wang 0001"}]))
+    conf, corr = ra.search_dblp("TIES-Merging: Resolving Interference When Merging Models")
+    assert conf.startswith("@inproceedings{DBLP:conf/nips/YadavTCRB23,")
+    assert "author       = {Prateek Yadav and Derek Tam}" in conf
+    assert "title        = {TIES-Merging: Resolving Interference When Merging Models}" in conf
+    assert "booktitle    = {Advances in Neural Information Processing Systems 36}" in conf
+    assert "biburl       = {https://dblp.org/rec/conf/nips/YadavTCRB23.bib}" in conf
+    # The shape the ladder reads to tell a preprint from a publication.
+    assert ra._is_corr(corr) and not ra._is_corr(conf)
+    assert "eprint       = {2306.01708}" in corr
+    assert "doi          = {10.48550/ARXIV.2306.01708}" in corr
+    assert "{Wei Wang}" in corr
+    assert all(u.startswith("https://sparql.dblp.org/sparql?") for u in sent)
+    assert "interference" in unquote_plus(sent[0])
+
+
+def test_no_dblp_hit_is_an_empty_answer_not_silence(dblp_sparql):
+    sent = dblp_sparql(_sparql_reply([]))
+    assert ra.search_dblp("Zebras Quantum Marmalade") == []
+    assert len(sent) == 1        # no author query for nothing
+
+
+def test_the_bot_challenge_page_is_no_answer(dblp_sparql):
+    """What dblp.org's search API now serves every script: HTML, status 200."""
+    dblp_sparql("<!doctype html><title>Making sure you're not a bot!</title>")
+    assert ra.search_dblp("TIES-Merging: Resolving Interference") is None
+
+
+def test_a_failed_author_query_is_no_answer(dblp_sparql):
+    dblp_sparql(_sparql_reply([{"pub": _TIES, "title": "T.", "btype": "#Inproceedings"}]), None)
+    assert ra.search_dblp("TIES-Merging: Resolving Interference") is None
+
+
+def test_malformed_json_is_no_answer(dblp_sparql):
+    dblp_sparql("{not json")
+    assert ra.search_dblp("TIES-Merging: Resolving Interference") is None

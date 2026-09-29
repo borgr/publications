@@ -538,32 +538,142 @@ def _extract_openreview_id(text: str) -> str | None:
 
 # ── DBLP ──────────────────────────────────────────────────────────────────────
 
-def search_dblp(title: str) -> list[str] | None:
-    """Search DBLP by title. Returns up to 5 BibTeX strings, or None if it did not reply.
+_DBLP_SPARQL = "https://sparql.dblp.org/sparql"
 
-    `[]` means DBLP has no record of this paper -- it answers a no-hit search
-    with an empty body. `None` means DBLP refused to answer, which says nothing
-    about the paper and must not be read as `[]`.
-    """
-    # h is how many hits DBLP returns, not how many requests this makes, so the
-    # only cost of raising it is response bytes. It has to be large enough that
-    # every *version* of one paper fits -- preprint, conference, journal, extended
-    # -- because pick_published chooses between them, and a published version that
-    # fell outside the window looks exactly like a paper that was never published.
-    # Seen at h=5: the XTREME query returned five near-title matches before either
-    # the ICML or the CoRR record appeared. 20 is well inside DBLP's own ceiling of
-    # 1000. Extra hits cannot lower precision much, since every candidate still has
-    # to pass titles_agree individually, but they do give a same-year paper with a
-    # near-identical title more chances to be offered, which is why this is 20 and
-    # not 200.
-    url = f"https://dblp.org/search/publ/api?q={quote(title)}&format=bib&h=20"
-    # An HTML body is DBLP's rate-limit page, served with status 200. Rejecting it
-    # here makes _curl_get retry it and, if it persists, report no answer.
-    raw = _curl_get(url, accept=lambda body: not body.lstrip().startswith("<"))
-    if raw is None:
+# Words too common to narrow a title search. The text index matches whole words,
+# and every word asked for must be in the title -- so asking for all of them drops
+# any version whose title changed. Three of the rarest is what found both of
+# TIES-Merging's records: its preprint is titled without "TIES", and five words
+# returned only the NeurIPS one.
+_DBLP_STOPWORDS = frozenset(
+    "a an and are as at by for from how in into is it of on or the to via with "
+    "what when where which who why do does can we our your their its".split())
+_DBLP_QUERY_WORDS = 3
+
+_DBLP_PREFIXES = (
+    "PREFIX dblp: <https://dblp.org/rdf/schema#>\n"
+    "PREFIX ql: <http://qlever.cs.uni-freiburg.de/builtin-functions/>\n")
+
+
+def _dblp_words(title: str) -> list[str]:
+    """The rarest-looking words of a title, as DBLP's text index spells them."""
+    words = [w for w in re.findall(r"[^\W_]+", title.lower())
+             if len(w) > 2 and w not in _DBLP_STOPWORDS]
+    # Longest first is a cheap proxy for rarest. Order-preserving de-duplication.
+    return sorted(dict.fromkeys(words), key=len, reverse=True)[:_DBLP_QUERY_WORDS]
+
+
+def _dblp_sparql(query: str) -> list[dict] | None:
+    """Run one query against DBLP's SPARQL endpoint; rows as {var: value}, or None."""
+    url = f"{_DBLP_SPARQL}?{urlencode({'query': _DBLP_PREFIXES + query})}"
+    raw = _curl_get(url, accept=lambda body: body.lstrip().startswith("{"))
+    if not raw:
         return None
-    entries = re.split(r'\n(?=@)', raw.strip())
-    return [e.strip() for e in entries if e.strip().startswith("@")]
+    try:
+        rows = json.loads(raw)["results"]["bindings"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return [{k: v.get("value", "") for k, v in row.items()} for row in rows]
+
+
+def _dblp_record_bib(rec: str, row: dict, authors: list[str]) -> str:
+    """One DBLP record as BibTeX in the shape dblp.org's own .bib export has.
+
+    Built rather than fetched because the .bib export sits behind the same bot
+    challenge as the search API. The shape matters: pick_published and _is_corr
+    read `journal = {CoRR}`, the entry type and `booktitle` the way DBLP writes
+    them, so this reproduces those fields and nothing the ladder does not read.
+    """
+    def _unstop(text):
+        # DBLP's RDF ends every title with a period; its .bib export does not.
+        text = text.strip()
+        return text[:-1] if text.endswith(".") else text
+
+    entry_type = (row.get("btype", "").rsplit("#", 1)[-1] or "misc").lower()
+    fields = [("author", " and ".join(authors)), ("title", _unstop(row.get("title", "")))]
+    volume = row.get("volume", "")
+    if entry_type == "article":
+        fields += [("journal", row.get("journal", "")), ("volume", volume)]
+    elif row.get("proc"):
+        fields.append(("booktitle", _unstop(row["proc"])))
+    fields += [("pages", row.get("pages", "")), ("year", row.get("year", "")),
+               ("url", row.get("url", ""))]
+    if row.get("journal") == "CoRR" and volume.startswith("abs/"):
+        fields += [("eprinttype", "arXiv"), ("eprint", volume[len("abs/"):])]
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", row.get("doi", ""), flags=re.I)
+    fields += [("doi", doi), ("biburl", f"https://dblp.org/rec/{rec}.bib"),
+               ("bibsource", "dblp computer science bibliography, https://dblp.org")]
+    body = ",\n".join(f"  {name:<12} = {{{escape_field_value(value)}}}"
+                      for name, value in fields if value)
+    return f"@{entry_type}{{DBLP:{rec},\n{body}\n}}"
+
+
+def search_dblp(title: str) -> list[str] | None:
+    """Search DBLP by title. Returns up to 20 BibTeX strings, or None if it did not reply.
+
+    `[]` means DBLP has no record of this paper. `None` means DBLP did not
+    answer, which says nothing about the paper and must not be read as `[]`.
+
+    Through DBLP's SPARQL service rather than its search API. In September 2026
+    dblp.org put a proof-of-work bot challenge in front of the search API, the
+    mirrors and the per-record .bib files alike, serving it as an HTML page with
+    status 200 to every non-browser client -- so every lookup here came back
+    "refused", DBLP was put in cooldown on each run, and step 3 had not completed
+    in 54 days. sparql.dblp.org is DBLP's published interface for programmatic
+    access and is not behind the challenge. Its QLever text index answers a
+    word search in under a second, where a CONTAINS scan over every title takes
+    ten.
+
+    Two queries: the candidate records with their scalar fields, then the author
+    lists of all of them at once, in order.
+    """
+    words = _dblp_words(title)
+    if not words:
+        return []
+    # Up to 20 hits so every *version* of one paper fits -- preprint, conference,
+    # journal, extended -- because pick_published chooses between them, and a
+    # published version that fell outside the window looks exactly like a paper
+    # that was never published. Every candidate still has to pass titles_agree.
+    match = " ".join(f'?text ql:contains-word "{w}" .' for w in words)
+    rows = _dblp_sparql(f"""
+SELECT ?pub (SAMPLE(?t) AS ?title) (SAMPLE(?bt) AS ?btype) (SAMPLE(?y) AS ?year)
+       (SAMPLE(?j) AS ?journal) (SAMPLE(?v) AS ?volume) (SAMPLE(?pp) AS ?pages)
+       (SAMPLE(?d) AS ?doi) (SAMPLE(?u) AS ?url) (SAMPLE(?pt) AS ?proc) WHERE {{
+  {{ SELECT DISTINCT ?pub ?t WHERE {{
+       ?pub dblp:title ?t . ?text ql:contains-entity ?t . {match}
+     }} LIMIT 20 }}
+  ?pub dblp:bibtexType ?bt .
+  OPTIONAL {{ ?pub dblp:yearOfPublication ?y }}
+  OPTIONAL {{ ?pub dblp:publishedInJournal ?j }}
+  OPTIONAL {{ ?pub dblp:publishedInJournalVolume ?v }}
+  OPTIONAL {{ ?pub dblp:pagination ?pp }}
+  OPTIONAL {{ ?pub dblp:doi ?d }}
+  OPTIONAL {{ ?pub dblp:primaryDocumentPage ?u }}
+  OPTIONAL {{ ?pub dblp:publishedAsPartOf ?parent . ?parent dblp:title ?pt }}
+}} GROUP BY ?pub""")
+    if rows is None:
+        return None
+    if not rows:
+        return []
+    values = " ".join(f"<{r['pub']}>" for r in rows)
+    signatures = _dblp_sparql(f"""
+SELECT ?pub ?ord ?name WHERE {{
+  VALUES ?pub {{ {values} }}
+  ?pub dblp:hasSignature ?s . ?s dblp:signatureOrdinal ?ord ; dblp:signatureDblpName ?name .
+}}""")
+    if signatures is None:
+        return None
+    authors: dict[str, list[tuple[int, str]]] = {}
+    for sig in signatures:
+        # DBLP's homonym suffix ("Wei Wang 0001") is an index, not part of the name;
+        # its own .bib export drops it too.
+        name = re.sub(r"\s+\d{4}$", "", sig["name"])
+        authors.setdefault(sig["pub"], []).append((int(sig["ord"]), name))
+    return [
+        _dblp_record_bib(r["pub"].split("/rec/", 1)[-1], r,
+                         [n for _o, n in sorted(authors.get(r["pub"], []))])
+        for r in rows
+    ]
 
 
 def _bib_year(bibtex: str) -> int | None:
