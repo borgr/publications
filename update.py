@@ -328,7 +328,7 @@ def step2b_enrich(dry_run: bool) -> int:
     # The bibliography, for resolving a venue from the entry rather than from
     # Scholar's truncated venue text.
     try:
-        with open(BIB_PATH) as f:
+        with open(BIB_PATH, encoding="utf-8") as f:
             bib_entries = {e["item_name"]: e for e in parse_bibtex(f.read())}
     except OSError:
         bib_entries = {}
@@ -400,7 +400,7 @@ def step2b_enrich(dry_run: bool) -> int:
 # ── Step 3 ─────────────────────────────────────────────────────────────────────
 
 def step3_resolve(dry_run: bool) -> tuple:
-    with open(BIB_PATH) as f:
+    with open(BIB_PATH, encoding="utf-8") as f:
         bib_text = f.read()
 
     attempts = load_attempts()
@@ -555,7 +555,7 @@ def step3_resolve(dry_run: bool) -> tuple:
     # .pipeline_state.json, so there is no longer any reason to rewrite an
     # unchanged file just to advance its mtime.
     if new_bib_text != bib_text:
-        with open(BIB_PATH, "w") as f:
+        with open(BIB_PATH, "w", encoding="utf-8") as f:
             f.write(new_bib_text)
         print(f"  Replaced {n_replaced} entries, appended {n_appended} entries → orig.bib updated")
     else:
@@ -685,7 +685,7 @@ def step6_worklist(dry_run: bool) -> None:
         print(f"  Warning: could not generate WORKLIST.md: {result.stderr.strip()[:300]}")
         return
     if os.path.exists(WORKLIST_PATH):
-        with open(WORKLIST_PATH) as f:
+        with open(WORKLIST_PATH, encoding="utf-8") as f:
             open_items = sum(1 for line in f if line.startswith("- "))
         print(f"  {open_items} open item(s) → WORKLIST.md")
 

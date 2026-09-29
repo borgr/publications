@@ -30,7 +30,7 @@ class Venues:
     @classmethod
     def load(cls, path=VENUES_PATH):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 return cls(yaml.safe_load(f))
         except FileNotFoundError:
             return cls({})
@@ -38,7 +38,7 @@ class Venues:
     def save(self, path=VENUES_PATH):
         """Write back, preserving key order and block style for readability."""
         tmp = path + ".tmp"
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.data, f, sort_keys=False, allow_unicode=True,
                            default_flow_style=False, width=100)
         os.replace(tmp, path)

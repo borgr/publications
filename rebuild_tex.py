@@ -123,7 +123,7 @@ def patch_bst_author(author_name: str | None = None) -> list:
         bst_path = os.path.join(OVERLEAF_DIR, bst_name)
         if not os.path.exists(bst_path):
             continue
-        with open(bst_path) as f:
+        with open(bst_path, encoding="utf-8") as f:
             original = f.read()
 
         patched = original
@@ -145,7 +145,7 @@ def patch_bst_author(author_name: str | None = None) -> list:
                     f'format.name$ purify$ "{new_part}" =')
 
         if patched != original:
-            with open(bst_path, "w") as f:
+            with open(bst_path, "w", encoding="utf-8") as f:
                 f.write(patched)
             print(f"  Patched author name in {bst_name}")
 
@@ -232,7 +232,7 @@ def _update_profile_stats(tex: str):
         # Genuinely optional: no stats fetched yet, nothing to write.
         return tex, None
     try:
-        with open(STATS_PATH) as f:
+        with open(STATS_PATH, encoding="utf-8") as f:
             stats = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         return tex, f"could not read {os.path.basename(STATS_PATH)}: {e}"
@@ -346,7 +346,7 @@ def main(cats: BibCategories = None):
     if cats is None:
         cats = build_bib.main()
 
-    with open(TEX_PATH) as f:
+    with open(TEX_PATH, encoding="utf-8") as f:
         tex = f.read()
 
     tex, problems = update_tex(tex, cats)
@@ -362,7 +362,7 @@ def main(cats: BibCategories = None):
               "have been reflowed or renamed. Restore the anchor, or update "
               "_SECTIONS / the regexes in rebuild_tex.py to match.")
 
-    with open(TEX_PATH, "w") as f:
+    with open(TEX_PATH, "w", encoding="utf-8") as f:
         f.write(tex)
 
     print(f"\nUpdated {TEX_PATH}")

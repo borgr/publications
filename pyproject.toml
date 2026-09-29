@@ -17,7 +17,15 @@ select = [
     "UP",   # pyupgrade, held to target-version
     "B",    # bugbear: mutable defaults, except-without-from, loop-variable slips
     "RUF",  # ruff's own checks
+    # open() without encoding= reads and writes the locale's codepage, which on
+    # Windows is cp1252: orig.bib fails to decode and a worklist line with a check
+    # mark fails to encode. Every run there crashed unless PYTHONUTF8=1 was set.
+    "PLW1514",
 ]
+# PLW1514 is still a preview rule. explicit-preview-rules keeps preview to the
+# rules named above instead of switching on every preview rule in these sets.
+preview = true
+explicit-preview-rules = true
 ignore = [
     # Line length is not enforced: there is no formatter in this repo, so E501
     # would mean hand-reflowing the figure scripts' long plotting calls for no

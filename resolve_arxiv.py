@@ -501,7 +501,7 @@ def _http_get_json(url: str, retries: int = 2, data: bytes | None = None) -> dic
 def load_attempts() -> dict:
     """Load {key: attempt_count} from disk; return empty dict if missing."""
     try:
-        with open(ATTEMPTS_PATH) as f:
+        with open(ATTEMPTS_PATH, encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
@@ -510,7 +510,7 @@ def load_attempts() -> dict:
 def save_attempts(attempts: dict) -> None:
     """Persist attempt counts atomically."""
     tmp = ATTEMPTS_PATH + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(attempts, f, indent=2, sort_keys=True)
     os.replace(tmp, ATTEMPTS_PATH)
 
@@ -1492,7 +1492,7 @@ def main(argv=None) -> None:
                              "(title, author and pretitle are left alone; diff it)")
     args = parser.parse_args(argv)
 
-    with open(args.bib) as f:
+    with open(args.bib, encoding="utf-8") as f:
         bib_text = f.read()
 
     arxiv_entries = get_arxiv_entries(bib_text)
@@ -1569,7 +1569,7 @@ def main(argv=None) -> None:
             if (_is_corr(content) and not _is_corr(bib)) or fixes_credits:
                 updates.append((key, bib, source))
 
-    with open(args.output, "w") as f:
+    with open(args.output, "w", encoding="utf-8") as f:
         f.write("\n\n".join(resolved_bibs))
         if resolved_bibs:
             f.write("\n")
@@ -1590,7 +1590,7 @@ def main(argv=None) -> None:
         return
     new_text, n_replaced, _ = update_bib_inplace(bib_text, updates, [])
     if n_replaced:
-        with open(args.bib, "w") as f:
+        with open(args.bib, "w", encoding="utf-8") as f:
             f.write(new_text)
     print(f"{n_replaced} entries upgraded in place in {args.bib} — `git diff` it.")
 

@@ -111,7 +111,7 @@ class IdentityStore:
     @classmethod
     def load(cls, path=IDENTITY_PATH):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return cls()
@@ -127,7 +127,7 @@ class IdentityStore:
                         "publications table, not here.",
             "records": {k: self.records[k] for k in sorted(self.records)},
         }
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
             f.write("\n")
         os.replace(tmp, path)

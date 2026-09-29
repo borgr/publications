@@ -174,7 +174,12 @@ def test_main_tex_is_written_even_with_no_overleaf_directory(fork):
 
 def test_the_submodule_points_at_the_new_project(fork, overleaf_remote):
     assert ina.replace_overleaf_submodule(str(overleaf_remote), root=str(fork)) is True
-    assert str(overleaf_remote) in (fork / ".gitmodules").read_text()
+    # Read back through git rather than as text: .gitmodules is config-file syntax,
+    # which escapes a backslash, so a Windows path is stored as C:\\Users\\...
+    url = subprocess.run(
+        ["git", "config", "-f", str(fork / ".gitmodules"), "submodule.overleaf.url"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert url == str(overleaf_remote)
     assert (fork / "overleaf" / "main.tex").read_text() == "theirs\n"
 
 

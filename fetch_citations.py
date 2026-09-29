@@ -222,7 +222,7 @@ def write_stats(stats: dict, path: str) -> None:
     stats[FETCHED_KEY] = date.today().isoformat()
     tmp = path + ".tmp"
     try:
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(stats, f, indent=2)
         os.replace(tmp, path)
     except Exception:

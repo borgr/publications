@@ -82,7 +82,7 @@ def sandbox(tmp_path, monkeypatch):
             self.bound = {}
 
         def run(self, df, bib_text, *argv):
-            with open(dedupe.BIB_PATH, "w") as f:
+            with open(dedupe.BIB_PATH, "w", encoding="utf-8") as f:
                 f.write(bib_text)
             monkeypatch.setattr(dedupe, "read_table", lambda *a, **k: df)
             return dedupe.main(list(argv))

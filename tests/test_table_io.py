@@ -211,9 +211,9 @@ def test_set_bib_keys_fills_only_empty_cells(tmp_path):
 
 
 def test_set_bib_keys_with_no_matches_does_not_rewrite(tmp_path, csv_path):
-    before = open(csv_path).read()
+    before = open(csv_path, encoding="utf-8").read()
     assert set_bib_keys({"No Such Paper": "k"}, csv_path) == 0
-    assert open(csv_path).read() == before
+    assert open(csv_path, encoding="utf-8").read() == before
 
 
 # ── filling and overwriting cells ────────────────────────────────────────────
@@ -253,9 +253,9 @@ def test_fill_blanks_ignores_a_column_the_table_does_not_have(csv_path):
 
 
 def test_fill_blanks_with_nothing_to_do_does_not_rewrite(csv_path):
-    before = open(csv_path).read()
+    before = open(csv_path, encoding="utf-8").read()
     assert fill_blanks({"Venue": {"No Such Paper": "acl"}}, csv_path) == 0
-    assert open(csv_path).read() == before
+    assert open(csv_path, encoding="utf-8").read() == before
 
 
 def test_set_column_replaces_a_value_that_is_already_there(tmp_path):
@@ -275,9 +275,9 @@ def test_set_column_leaves_rows_it_was_not_given_alone(csv_path):
 
 
 def test_set_column_on_an_absent_column_is_a_no_op(csv_path):
-    before = open(csv_path).read()
+    before = open(csv_path, encoding="utf-8").read()
     assert set_column("NotAColumn", {"A Real Paper": "x"}, csv_path) == 0
-    assert open(csv_path).read() == before
+    assert open(csv_path, encoding="utf-8").read() == before
 
 
 def test_set_column_with_no_assignments_is_a_no_op(csv_path):
@@ -300,7 +300,7 @@ def test_write_leaves_no_temp_file(csv_path):
 def test_flags_round_trip_as_integers_not_floats(csv_path):
     """`1.0` in the file makes diffs noisy and confuses the validator."""
     write_table(read_table(csv_path), csv_path)
-    assert ",1.0," not in open(csv_path).read()
+    assert ",1.0," not in open(csv_path, encoding="utf-8").read()
 
 
 def test_a_write_that_fails_partway_leaves_the_table_untouched(csv_path, monkeypatch):
@@ -308,7 +308,7 @@ def test_a_write_that_fails_partway_leaves_the_table_untouched(csv_path, monkeyp
     the run that writes it is unattended. Writing in place would truncate it to
     however many rows got flushed before the error; the temp-file-then-rename is
     what makes a crash cost nothing."""
-    before = open(csv_path).read()
+    before = open(csv_path, encoding="utf-8").read()
     df = read_table(csv_path)
 
     class Exploding:
@@ -318,7 +318,7 @@ def test_a_write_that_fails_partway_leaves_the_table_untouched(csv_path, monkeyp
     monkeypatch.setattr(table_io.csv, "writer", lambda _f: Exploding())
     with pytest.raises(OSError):
         write_table(df, csv_path)
-    assert open(csv_path).read() == before
+    assert open(csv_path, encoding="utf-8").read() == before
     assert not os.path.exists(csv_path + ".tmp"), "a stale temp file was left behind"
 
 

@@ -146,7 +146,7 @@ def test_force_overrides_an_auto_skip(h):
 
 def test_a_changed_input_un_skips_the_step(h):
     h.completed("resolve")
-    with open(h.inputs["resolve"][0], "a") as f:
+    with open(h.inputs["resolve"][0], "a", encoding="utf-8") as f:
         f.write("a new paper\n")
     update.main([])
     assert h.ran("step3_resolve")
@@ -165,7 +165,7 @@ def test_a_changed_input_un_skips_the_step(h):
 ])
 def test_an_edited_output_un_skips_the_step(h, step, func):
     h.completed(step)
-    with open(h.outputs[step][0], "w") as f:
+    with open(h.outputs[step][0], "w", encoding="utf-8") as f:
         f.write("someone reverted this by hand\n")
     update.main([])
     assert h.ran(func)
@@ -229,7 +229,7 @@ def test_renaming_the_author_rebuilds_the_cv(h):
     config_input = [p for p in h.inputs["rebuild_tex"]
                     if os.path.basename(p) == "config.py"]
     assert config_input, "config.py is not an input to step 5"
-    with open(config_input[0], "w") as f:
+    with open(config_input[0], "w", encoding="utf-8") as f:
         f.write('AUTHOR_NAME = "Someone Else"\n')
     update.main(["--no-notify"])
     assert h.ran("step5_rebuild_tex")
@@ -450,7 +450,7 @@ def test_skipping_the_push_still_exits_zero(h):
 
 def test_the_state_file_stays_valid_json(h):
     update.main([])
-    with open(h.state_path) as f:
+    with open(h.state_path, encoding="utf-8") as f:
         json.load(f)
 
 

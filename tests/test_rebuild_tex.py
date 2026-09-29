@@ -208,7 +208,7 @@ def test_the_live_document_still_has_every_anchor():
                         "overleaf", "main.tex")
     if not os.path.exists(path):
         pytest.skip("overleaf submodule not checked out")
-    tex = open(path).read()
+    tex = open(path, encoding="utf-8").read()
     for _field, kind, anchor in rebuild_tex._SECTIONS:
         needle = f"\\chapter*{{{anchor}}}" if kind == "chapter" else anchor
         assert needle in tex, f"anchor missing from the live main.tex: {anchor!r}"

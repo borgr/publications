@@ -67,14 +67,14 @@ def wipe_citations_csv(root=None):
 
 def wipe_profile_stats(root=None):
     root = root or FILE_DIR
-    with open(os.path.join(root, "profile_stats.json"), "w") as f:
+    with open(os.path.join(root, "profile_stats.json"), "w", encoding="utf-8") as f:
         json.dump({"citations": 0, "h_index": 0}, f)
     print("  Reset profile_stats.json")
 
 
 def wipe_orig_bib(root=None):
     root = root or FILE_DIR
-    open(os.path.join(root, "orig.bib"), "w").close()
+    open(os.path.join(root, "orig.bib"), "w", encoding="utf-8").close()
     print("  Cleared orig.bib")
 
 
@@ -82,7 +82,7 @@ def wipe_wzmn_bib(root=None):
     root = root or FILE_DIR
     path = os.path.join(root, "overleaf", "Wzmn.bib")
     if os.path.exists(path):
-        open(path, "w").close()
+        open(path, "w", encoding="utf-8").close()
         print("  Cleared overleaf/Wzmn.bib")
 
 

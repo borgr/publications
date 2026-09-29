@@ -261,7 +261,7 @@ def test_the_live_bibliography_is_entirely_parseable():
                         "overleaf", "Wzmn.bib")
     if not os.path.exists(path):
         pytest.skip("overleaf submodule not checked out")
-    entries = parse_bibtex(open(path).read())
+    entries = parse_bibtex(open(path, encoding="utf-8").read())
     assert entries
     bad = [e["item_name"] for e in entries
            if not is_wellformed_entry(e["beg"] + e["rest"], e["item_name"])]

@@ -265,7 +265,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     df = read_table()
-    with open(BIB_PATH) as f:
+    with open(BIB_PATH, encoding="utf-8") as f:
         bib_text = f.read()
 
     drops, unresolved, suspected = plan(df, bib_text)

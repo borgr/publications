@@ -184,7 +184,7 @@ def _unpublished_output():
 
 def gather():
     """Collect open items. Returns (sections, total_count)."""
-    with open(BIB_PATH) as f:
+    with open(BIB_PATH, encoding="utf-8") as f:
         bib_text = f.read()
     parsed = parse_bibtex(bib_text)
     df = read_df()
@@ -543,10 +543,10 @@ def main(argv=None):
     text = render(sections, result)
     previous = ""
     if os.path.exists(WORKLIST_PATH):
-        with open(WORKLIST_PATH) as f:
+        with open(WORKLIST_PATH, encoding="utf-8") as f:
             previous = f.read()
     if text != previous:
-        with open(WORKLIST_PATH, "w") as f:
+        with open(WORKLIST_PATH, "w", encoding="utf-8") as f:
             f.write(text)
     if not args.quiet:
         print(f"  {total} open item(s) in {len(sections)} section(s) → WORKLIST.md")

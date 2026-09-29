@@ -51,7 +51,7 @@ def test_round_trips_the_current_shape(tmp_path):
 def test_header_is_written(tmp_path):
     path = str(tmp_path / "c.csv")
     write_citation_rows([], path)
-    assert open(path).read().strip().split(",") == HEADER
+    assert open(path, encoding="utf-8").read().strip().split(",") == HEADER
 
 
 def test_missing_count_is_none_not_zero(tmp_path):
@@ -107,7 +107,7 @@ def test_failed_write_does_not_destroy_the_previous_file(tmp_path):
         write_citation_rows([Explode()], path)
     except Exception:
         pass
-    assert "Good" in open(path).read()
+    assert "Good" in open(path, encoding="utf-8").read()
     assert not os.path.exists(path + ".tmp")
 
 

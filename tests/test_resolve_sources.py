@@ -1598,7 +1598,7 @@ def cli(tmp_path, monkeypatch):
 def test_the_cli_writes_what_it_resolved(cli, capsys):
     _tmp, bib, out = cli
     ra.main(["--bib", bib, "--output", out])
-    assert "booktitle = {ACL}" in open(out).read()
+    assert "booktitle = {ACL}" in open(out, encoding="utf-8").read()
     assert "1/1 entries written" in capsys.readouterr().out
 
 
@@ -1607,14 +1607,14 @@ def test_the_cli_leaves_the_bib_alone_without_in_place(cli, capsys):
     how to ask for it."""
     _tmp, bib, out = cli
     ra.main(["--bib", bib, "--output", out])
-    assert open(bib).read() == _EXISTING
+    assert open(bib, encoding="utf-8").read() == _EXISTING
     assert "rerun with --in-place" in capsys.readouterr().out
 
 
 def test_in_place_upgrades_the_preprint_entry(cli, capsys):
     _tmp, bib, out = cli
     ra.main(["--bib", bib, "--output", out, "--in-place"])
-    text = open(bib).read()
+    text = open(bib, encoding="utf-8").read()
     assert extract_field(text, "booktitle") == "ACL"
     assert "1 entries upgraded in place" in capsys.readouterr().out
     assert extract_field(text, "title") == "A Paper", (
@@ -1664,7 +1664,7 @@ def test_an_empty_bib_produces_an_empty_output(cli):
     empty = tmp / "empty.bib"
     empty.write_text("")
     ra.main(["--bib", str(empty), "--output", out])
-    assert open(out).read() == "", "a fresh fork has no entries and must not crash"
+    assert open(out, encoding="utf-8").read() == "", "a fresh fork has no entries and must not crash"
 
 
 def test_the_run_asks_s2_about_every_candidate_before_resolving_any(cli, monkeypatch):

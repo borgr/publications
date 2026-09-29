@@ -476,7 +476,7 @@ def _report_duplicates(parsed, df):
 
 
 def main():
-    with open(os.path.join(FILE_DIR, "orig.bib")) as f:
+    with open(os.path.join(FILE_DIR, "orig.bib"), encoding="utf-8") as f:
         bib_raw = f.read()
 
     parsed = parse_bibtex(bib_raw)
@@ -501,7 +501,7 @@ def main():
         parsed, df, name2cite, suppressed=suppressed)
 
     enhanced_path = os.path.join(FILE_DIR, "overleaf", "Wzmn.bib")
-    with open(enhanced_path, "w") as f:
+    with open(enhanced_path, "w", encoding="utf-8") as f:
         f.write(bib_out)
 
     _check_coverage(parsed, df, bibs_seen)

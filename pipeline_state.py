@@ -65,7 +65,7 @@ class RunLock:
 
     def _read_pid(self):
         try:
-            with open(self.path) as f:
+            with open(self.path, encoding="utf-8") as f:
                 return int((f.read().split("\n")[0] or "0").strip())
         except (OSError, ValueError):
             return 0
@@ -89,7 +89,7 @@ class RunLock:
                 except OSError:
                     pass
                 continue
-            with os.fdopen(fd, "w") as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(f"{os.getpid()}\n{time.strftime('%Y-%m-%dT%H:%M:%S')}\n")
             self.acquired = True
             return self
@@ -154,7 +154,7 @@ class PipelineState:
     @classmethod
     def load(cls, path=STATE_PATH):
         try:
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             return cls(path=path)
@@ -174,7 +174,7 @@ class PipelineState:
             "version": self.VERSION,
             "steps": {k: self.steps[k] for k in sorted(self.steps)},
         }
-        with open(tmp, "w") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
             f.write("\n")
         os.replace(tmp, self.path)
