@@ -141,6 +141,17 @@ def test_missing_entry_without_authors_uses_a_placeholder():
     assert entry["item_name"].startswith("unknown2024")
 
 
+def test_missing_entry_carries_the_arxiv_id_from_the_venue_cell():
+    """Scholar's venue for a preprint is the only exact identifier a new row has."""
+    df = _df([{"Name": "Why Pretraining Fails", "Bib": None, "Authors": "A Gaber",
+               "year": 2026, "Venue": "arXiv preprint arXiv:2609.19291, 2026"},
+              {"Name": "A Journal Paper", "Bib": None, "Authors": "B Doe",
+               "year": 2026, "Venue": "TACL"}])
+    preprint, journal = get_missing_bib_entries("", df=df)
+    assert preprint["arxiv"] == "2609.19291"
+    assert journal["arxiv"] is None
+
+
 def test_row_already_present_in_the_bib_is_not_missing():
     df = _df([{"Name": "A Published Paper", "Bib": "doe2024paper",
                "Authors": "Doe, Jane", "year": 2024}])

@@ -83,6 +83,7 @@ _DEPRIORITIZE_AFTER = 5
 # The source label for "nothing was found, but a source we needed was silent".
 # Distinct from "not found", which is a real negative answer from every source.
 UNANSWERED = "unknown (a source did not reply)"
+ARXIV_FALLBACK = "arXiv (export API)"
 
 _CURL_FLAGS = [
     "--silent", "--compressed", "--max-time", "20",
@@ -1335,7 +1336,7 @@ def resolve(title: str, arxiv_id: str | None, original_key: str,
         return _replace_key(corr_bib, original_key), "arXiv (DBLP/CoRR)"
     if arxiv_id:
         return (fetch_arxiv_bib(arxiv_id, original_key, known_title=title),
-                "arXiv (export API)")
+                ARXIV_FALLBACK)
 
     # Nothing found -- but "no source has it" and "no source answered" are
     # different conclusions, and only the first is worth recording as a failed
@@ -1404,7 +1405,7 @@ def main(argv=None) -> None:
     for entry in candidates:
         key = entry["item_name"]
         title = entry["title"]
-        arxiv_id = _get_arxiv_id(entry)
+        arxiv_id = _get_arxiv_id(entry) or entry.get("arxiv")
         content = entry.get("content", "")
 
         arxiv_label = f"arXiv:{arxiv_id}" if arxiv_id else "(no arXiv ID)"

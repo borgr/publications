@@ -549,6 +549,42 @@ def test_no_key_is_written_for_a_row_nothing_resolved(step3):
     assert saved["keys"] == {}
 
 
+def _arxiv_bib(key, title):
+    return (f"@misc{{{key},\n  title = {{{title}}},\n  eprint = {{2609.19291}},\n"
+            f"  archivePrefix = {{arXiv}}\n}}\n")
+
+
+def test_a_new_preprint_row_resolves_through_its_venue_arxiv_id(step3):
+    """A two-week-old preprint is in neither DBLP nor OpenAlex, so the arXiv rung is
+    the only one that can answer -- and it needs the ID from the Venue cell. Before
+    that was passed on, every such row ended with no entry, week after week."""
+    seen = []
+
+    def resolver(title, arxiv_id, key, content, store=None):
+        seen.append(arxiv_id)
+        return _arxiv_bib(key, title), update.ARXIV_FALLBACK
+    row = {"item_name": "gaber2026why", "arxiv": "2609.19291",
+           "title": "Why Pretraining Fails to Share Cross-Lingual Knowledge"}
+    (_u, appended, _sa, not_found), bib, _s = step3("", missing=[row], resolver=resolver)
+    assert seen == ["2609.19291"]
+    assert appended == 1 and not_found == []
+    assert "@misc{gaber2026why" in bib
+
+
+def test_a_venue_arxiv_id_naming_a_different_paper_is_refused(step3):
+    """The ID came from a Scholar cell nobody checked. An entry built from the
+    wrong paper's abstract page would put that paper on the CV under this key."""
+    resolver = lambda t, a, k, c, store=None: (  # noqa: E731
+        _arxiv_bib(k, "Something Else Entirely About Protein Folding"),
+        update.ARXIV_FALLBACK)
+    row = {"item_name": "gaber2026why", "arxiv": "2609.19291",
+           "title": "Why Pretraining Fails to Share Cross-Lingual Knowledge"}
+    (_u, appended, _sa, not_found), bib, _s = step3("", missing=[row], resolver=resolver)
+    assert appended == 0 and bib == ""
+    assert not_found == [("Why Pretraining Fails to Share Cross-Lingual Knowledge",
+                          "gaber2026why")]
+
+
 def test_an_unresolved_row_is_reported_by_title(step3):
     (_u, _a, _sa, not_found), _bib, _s = step3(
         "", missing=[{"item_name": "new1", "title": "A New Paper"}])
@@ -681,9 +717,10 @@ def test_a_missing_rows_remembered_id_goes_out_in_the_same_request(step3, monkey
                         lambda ids: asked.append(list(ids)) or 0)
     step3(_ARXIV_ENTRY.format(key="k1", title="A Paper", eprint="2401.00001"),
           missing=[{"item_name": "k2", "title": "A Row With No Entry"},
-                   {"item_name": "k3", "title": "A Row Nothing Knows About"}],
+                   {"item_name": "k3", "title": "A Row Nothing Knows About"},
+                   {"item_name": "k4", "title": "A Row From Scholar", "arxiv": "2609.19291"}],
           records={"k2": {"arxiv": "2510.26183"}})
-    assert asked == [["2401.00001", "2510.26183", None]]
+    assert asked == [["2401.00001", "2510.26183", None, "2609.19291"]]
 
 
 def test_a_dry_run_does_not_ask_semantic_scholar_either(tmp_path, monkeypatch):

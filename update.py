@@ -57,6 +57,7 @@ from identity import (
 from pipeline_state import AlreadyRunning, PipelineState, RunLock
 from resolve_arxiv import (
     _DEPRIORITIZE_AFTER,
+    ARXIV_FALLBACK,
     UNANSWERED,
     load_attempts,
     prefetch_s2_by_arxiv,
@@ -64,6 +65,7 @@ from resolve_arxiv import (
     resolve,
     save_attempts,
     sort_by_attempts,
+    titles_agree,
     unanswered_lookups,
 )
 from table_io import (
@@ -452,7 +454,8 @@ def step3_resolve(dry_run: bool) -> tuple:
     # request too.
     n_prefetched = prefetch_s2_by_arxiv(
         [_get_arxiv_id(e) for e in arxiv_entries]
-        + [(store.records.get(e["item_name"]) or {}).get("arxiv") for e in missing_entries]
+        + [e.get("arxiv") or (store.records.get(e["item_name"]) or {}).get("arxiv")
+           for e in missing_entries]
     )
     if n_prefetched:
         print(f"  Semantic Scholar answered for {n_prefetched} of them in one request")
@@ -487,7 +490,14 @@ def step3_resolve(dry_run: bool) -> tuple:
         key = entry["item_name"]
         print(f"    [{key:<40}]", end=" ", flush=True)
         before = unanswered_lookups()
-        bib, source = resolve(entry["title"], None, key, "", store=store)
+        arxiv_id = entry.get("arxiv")
+        bib, source = resolve(entry["title"], arxiv_id, key, "", store=store)
+        # The ID came from a Scholar cell, not from an entry anyone checked, and the
+        # arXiv rung builds its entry from whatever page that ID names. Keep it only
+        # if that page is this row's paper.
+        if (bib and source == ARXIV_FALLBACK
+                and not titles_agree(entry["title"], extract_field(bib, "title"))):
+            bib, source = "", f"not found (arXiv:{arxiv_id} in the Venue cell is a different paper)"
         print(f"→ {source}")
         if bib or unanswered_lookups() == before:
             attempts[key] = attempts.get(key, 0) + 1

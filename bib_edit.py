@@ -450,6 +450,14 @@ def get_missing_bib_entries(bib_text: str, df=None) -> list[dict]:
             key = placeholder_key(year, name, taken=assigned)
         assigned.add(key)
 
+        # Scholar writes an arXiv-only paper's venue as "arXiv preprint
+        # arXiv:2609.19291, 2026". That ID is the one exact identifier a new row
+        # has, and without it the arXiv fallback in resolve() is unreachable: a
+        # brand-new preprint is not in DBLP or OpenAlex yet, so every row like
+        # that ended "unknown" or "not found" and never got an entry.
+        venue = str(row.get("Venue", "") or "")
+        arxiv_id = _get_arxiv_id({"content": venue}) if venue.lower() != "nan" else None
+
         missing.append({"item_name": key, "title": name, "authors": authors,
-                        "year": year, "content": ""})
+                        "year": year, "content": "", "arxiv": arxiv_id})
     return missing
