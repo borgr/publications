@@ -21,6 +21,9 @@ on:
     # CI checking first would compare against data an hour from being replaced
     # and report a staleness that fixes itself.
     - cron: "47 14 * * 1"
+    # Monthly, for the `last-run` job only: the one check that the local run
+    # itself cannot perform, because it is about the local run not happening.
+    - cron: "23 15 1 * *"
   workflow_dispatch:
 
 permissions:
@@ -386,3 +389,27 @@ jobs:
           # rather than failing on a race with a human edit.
           git push origin || { git pull --rebase --autostash origin && git push origin; }
           echo "::notice title=Overleaf updated::Pushed the rebuilt CV to Overleaf."
+
+  last-run:
+    # Has the local weekly run fetched Scholar within the last month?
+    #
+    # Every alert the local run raises lives on the machine it runs on, so when
+    # that machine is off or gone nothing fails -- the CV just stops updating.
+    # It went two weeks unnoticed in September 2026. This reads the committed
+    # .pipeline_state.json instead, and a red run here is what emails the owner
+    # of the schedule. Monthly rather than weekly so a lapse costs one email, not
+    # one a week; workflow_dispatch runs it on demand.
+    if: github.event.schedule == '23 15 1 * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Last successful Scholar fetch
+        run: python scripts/check_last_run.py --max-days 31
