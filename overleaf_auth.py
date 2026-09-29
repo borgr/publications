@@ -31,6 +31,8 @@ import shutil
 import subprocess
 from urllib.parse import urlsplit
 
+import config
+
 ENV_VAR = "OVERLEAF_GIT_URL"
 
 _CREDENTIAL_IN_URL = re.compile(r'//[^/@\s]*@')
@@ -78,7 +80,7 @@ def url_from_env():
 # live somewhere that cannot be committed by accident, and anything inside the
 # repository can be: step 7 runs `git add -A`, and a .gitignore entry protects
 # only the exact path whoever wrote it remembered to list.
-URL_FILE = os.path.expanduser("~/.config/publications/overleaf_git_url")
+URL_FILE = os.path.join(config.user_config_dir(), "overleaf_git_url")
 
 
 def url_from_file(path=None):

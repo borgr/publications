@@ -15,6 +15,7 @@ import pytest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import config
 import overleaf_auth
 
 
@@ -175,8 +176,15 @@ class TestUrlFromFile:
 
     def test_the_default_location_is_outside_any_repository(self):
         """It is a plaintext token; inside a working tree, `git add -A` reaches it."""
-        assert overleaf_auth.URL_FILE.startswith(os.path.expanduser("~"))
+        assert overleaf_auth.URL_FILE.startswith(config.user_config_dir())
         assert not overleaf_auth.is_inside(overleaf_auth.URL_FILE, ROOT)
+
+    def test_the_config_dir_follows_xdg_config_home(self, monkeypatch, tmp_path):
+        """What lets a machine keep its secrets beside the checkouts, not in ~."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        assert config.user_config_dir() == os.path.join(str(tmp_path), "publications")
+        monkeypatch.delenv("XDG_CONFIG_HOME")
+        assert config.user_config_dir().startswith(os.path.expanduser("~"))
 
 
 class TestIsInside:

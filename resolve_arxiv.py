@@ -45,6 +45,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -88,8 +89,10 @@ ARXIV_FALLBACK = "arXiv (export API)"
 _CURL_FLAGS = [
     "--silent", "--compressed", "--max-time", "20",
     "-A", "resolve-arxiv-bib/1.0",
-    "--cookie-jar", "/tmp/_resolve_arxiv_cookies.txt",
-    "--cookie", "/tmp/_resolve_arxiv_cookies.txt",
+    # The system temp dir, not a literal /tmp: on Windows curl.exe reads "/tmp" as
+    # C:	mp, which it creates at the root of the drive.
+    "--cookie-jar", os.path.join(tempfile.gettempdir(), "_resolve_arxiv_cookies.txt"),
+    "--cookie", os.path.join(tempfile.gettempdir(), "_resolve_arxiv_cookies.txt"),
 ]
 
 
@@ -315,7 +318,7 @@ def reset_rate_limits() -> None:
 # password git itself has to answer a prompt with, while this is a header value
 # this code sends, so there is nothing to hand to a credential helper. Outside
 # every worktree either way.
-KEY_FILE = os.path.expanduser("~/.config/publications/s2_api_key")
+KEY_FILE = os.path.join(config.user_config_dir(), "s2_api_key")
 
 ENV_SOURCE = "the S2_API_KEY environment variable"
 FILE_SOURCE = KEY_FILE

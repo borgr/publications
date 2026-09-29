@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import date
 from urllib.parse import parse_qs, urlparse
@@ -51,8 +52,10 @@ _CURL_FLAGS = [
     "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "-H", "Referer: https://scholar.google.com/",
     # Persist cookies across requests in the same run
-    "--cookie-jar", "/tmp/_scholar_cookies.txt",
-    "--cookie", "/tmp/_scholar_cookies.txt",
+    # The system temp dir, not a literal /tmp, which curl.exe on Windows turns
+    # into C:	mp at the root of the drive.
+    "--cookie-jar", os.path.join(tempfile.gettempdir(), "_scholar_cookies.txt"),
+    "--cookie", os.path.join(tempfile.gettempdir(), "_scholar_cookies.txt"),
 ]
 
 
