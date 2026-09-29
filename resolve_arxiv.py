@@ -325,6 +325,23 @@ FILE_SOURCE = KEY_FILE
 CONFIG_SOURCE = "config.py"
 
 
+def key_from_file_text(text: str) -> str:
+    """The key in a key file, whether it holds the bare key or a pasted shell line.
+
+    `export S2_API_KEY="abc-..."` is the natural thing to paste, and was sent
+    verbatim as the header value: Semantic Scholar answered 403 to every request,
+    which reads as a revoked key rather than a file in the wrong shape.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            line = line.split("=", 1)[1].strip()
+        return line.strip("\"'").strip()
+    return ""
+
+
 def s2_api_key_source() -> tuple[str, str]:
     """The Semantic Scholar API key and where it was found, or ("", "") for none.
 
@@ -339,7 +356,7 @@ def s2_api_key_source() -> tuple[str, str]:
         return key, ENV_SOURCE
     try:
         with open(KEY_FILE, encoding="utf-8") as fh:
-            key = fh.read().strip()
+            key = key_from_file_text(fh.read())
     except OSError:
         key = ""
     if key:

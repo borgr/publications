@@ -1773,3 +1773,17 @@ def test_a_failed_author_query_is_no_answer(dblp_sparql):
 def test_malformed_json_is_no_answer(dblp_sparql):
     dblp_sparql("{not json")
     assert ra.search_dblp("TIES-Merging: Resolving Interference") is None
+
+
+@pytest.mark.parametrize("text", [
+    "abc-123\n",
+    "\nexport S2_API_KEY=\"abc-123\"\n",
+    "S2_API_KEY = 'abc-123'",
+    "# my key\nabc-123",
+])
+def test_the_key_file_may_hold_a_bare_key_or_a_pasted_shell_line(text):
+    assert ra.key_from_file_text(text) == "abc-123"
+
+
+def test_an_empty_key_file_has_no_key():
+    assert ra.key_from_file_text("\n  \n") == ""
