@@ -761,6 +761,7 @@
     "cheng2026skill": {
       "arxiv": "2608.25832",
       "s2": "291371154",
+      "scholar_id": "8b8IhUYAAAAJ:MLfJN-KU85MC",
       "titles": [
         "skillissueareskillslanguageinvariantinllms"
       ]
@@ -856,6 +857,14 @@
       "scholar_id": "8b8IhUYAAAAJ:nb7KW1ujOQ8C",
       "titles": [
         "pretraininglanguagemodelsfordiachroniclinguisticchangediscovery"
+      ]
+    },
+    "gaber2026why": {
+      "arxiv": "2609.19291",
+      "s2": "292059375",
+      "scholar_id": "8b8IhUYAAAAJ:VaXvl8Fpj5cC",
+      "titles": [
+        "whypretrainingfailstosharecrosslingualknowledge"
       ]
     },
     "gabrielsson2025compress": {
