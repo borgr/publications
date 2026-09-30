@@ -604,6 +604,31 @@ _OVERLEAF_FILES = ["main.tex", "Wzmn.bib",
                    "planyr-rev.bst", "planyr.bst", "iclr-based.bst"]
 
 
+def _attach_to_branch(repo_dir: str, remote: str) -> None:
+    """Put a detached checkout on the remote's default branch, at the same commit.
+
+    `git submodule update --init` -- what every fresh clone runs -- checks
+    overleaf/ out as a detached HEAD. A commit there then belongs to no branch,
+    `git push` has nothing to push, and the rebase that recovers from a moved
+    remote fails with "You are not currently on a branch". Creating the branch at
+    HEAD keeps the working tree and index exactly as they are.
+    """
+    on_branch = subprocess.run(["git", "-C", repo_dir, "symbolic-ref", "-q", "HEAD"],
+                               capture_output=True)
+    if on_branch.returncode == 0:
+        return
+    default = subprocess.run(
+        ["git", "-C", repo_dir, "symbolic-ref", "--short", f"refs/remotes/{remote}/HEAD"],
+        capture_output=True, text=True)
+    if default.returncode != 0:
+        return      # no default branch recorded: leave it, and let the push report it
+    branch = default.stdout.strip().split("/", 1)[-1]
+    subprocess.run(["git", "-C", repo_dir, "checkout", "-q", "-B", branch],
+                   capture_output=True)
+    subprocess.run(["git", "-C", repo_dir, "branch", "-q",
+                    f"--set-upstream-to={remote}/{branch}"], capture_output=True)
+
+
 def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: str) -> bool:
     """Stage files, commit if changed, rebase onto the remote, push.
 
@@ -612,6 +637,7 @@ def _git_commit_and_push(repo_dir: str, files: list[str], message: str, remote: 
     push from here is rejected until someone pulls by hand. Rebasing first
     makes that self-healing instead of a standing manual chore.
     """
+    _attach_to_branch(repo_dir, remote)
     existing = [f for f in files if os.path.exists(os.path.join(repo_dir, f))]
     add = subprocess.run(["git", "-C", repo_dir, "add", "--"] + existing,
                          capture_output=True, text=True)
@@ -702,7 +728,11 @@ def step7_push(dry_run: bool) -> bool:
     # goes first so the submodule pointer the outer commit records already exists
     # on the remote.
     overleaf_ok = _git_commit_and_push(OVERLEAF_DIR, _OVERLEAF_FILES, message, "origin")
-    github_ok = _git_commit_and_push(FILE_DIR, _OUTER_FILES, message, "origin")
+    # If Overleaf refused, the pointer would name a commit only this machine has,
+    # and every other clone's `submodule update` would fail on it. The data still
+    # goes to GitHub; CI's publish job rebuilds Overleaf from it.
+    outer = _OUTER_FILES if overleaf_ok else [f for f in _OUTER_FILES if f != "overleaf"]
+    github_ok = _git_commit_and_push(FILE_DIR, outer, message, "origin")
     return overleaf_ok and github_ok
 
 

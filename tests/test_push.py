@@ -123,3 +123,41 @@ def test_step7_dry_run_does_not_touch_git(monkeypatch):
     monkeypatch.setattr(update, "_git_commit_and_push",
                         lambda *a, **k: pytest.fail("dry run must not push"))
     assert update.step7_push(dry_run=True) is True
+
+
+def test_a_detached_checkout_is_put_on_its_branch_and_pushed(remote_and_clone):
+    """What `git submodule update --init` leaves: a detached HEAD, from which the
+    commit belonged to no branch and the recovery rebase failed outright."""
+    _, clone, seed = remote_and_clone
+    git(clone, "checkout", "-q", "--detach")
+    (seed / "notes.tex").write_text("edited in overleaf\n")
+    git(seed, "add", "notes.tex")
+    git(seed, "commit", "-m", "overleaf edit")
+    git(seed, "push", "origin", "main")
+
+    (clone / "main.tex").write_text("pipeline output\n")
+    assert update._git_commit_and_push(str(clone), ["main.tex"], "msg", "origin")
+    assert git(clone, "symbolic-ref", "--short", "HEAD").stdout.strip() == "main"
+    assert "pipeline output" in git(clone, "show", "origin/main:main.tex").stdout
+    assert "edited in overleaf" in git(clone, "show", "origin/main:notes.tex").stdout
+
+
+def test_the_submodule_pointer_is_held_back_when_overleaf_refused(monkeypatch):
+    """Otherwise GitHub records an Overleaf commit that exists on one machine only."""
+    calls = []
+
+    def fake(repo_dir, files, message, remote):
+        calls.append(list(files))
+        return repo_dir != update.OVERLEAF_DIR
+    monkeypatch.setattr(update, "_git_commit_and_push", fake)
+    assert update.step7_push(dry_run=False) is False
+    assert "overleaf" not in calls[1]
+    assert "orig.bib" in calls[1]
+
+
+def test_the_submodule_pointer_is_pushed_when_overleaf_accepted(monkeypatch):
+    calls = []
+    monkeypatch.setattr(update, "_git_commit_and_push",
+                        lambda repo_dir, files, message, remote: calls.append(list(files)) or True)
+    assert update.step7_push(dry_run=False) is True
+    assert "overleaf" in calls[1]
