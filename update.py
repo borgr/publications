@@ -966,6 +966,8 @@ Companion commands, none needed routinely:
 
 
 if __name__ == "__main__":
+    import console
+    console.use_utf8_stdio()
     try:
         # One run at a time: the weekly scheduled run and a manual one would
         # otherwise interleave their reads and writes and lose an update.

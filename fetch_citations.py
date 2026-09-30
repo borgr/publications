@@ -362,4 +362,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    import console
+    console.use_utf8_stdio()
     main()
