@@ -54,6 +54,7 @@ from identity import (
     join_citations,
     normalize_title,
 )
+from link_fill import entries_without_link, fill_links
 from pipeline_state import AlreadyRunning, PipelineState, RunLock
 from resolve_arxiv import (
     _DEPRIORITIZE_AFTER,
@@ -426,6 +427,8 @@ def step3_resolve(dry_run: bool) -> tuple:
             print(f"    [{entry['item_name']:<40}] {entry['title'][:60]}")
         if len(missing) > 20:
             print(f"    … and {len(missing) - 20} more")
+        print(f"  Would look up a link for {len(entries_without_link(bib_text))} "
+              f"entr(ies) with no DOI, arXiv ID or URL")
         return 0, 0, len(arxiv_entries), []
 
     def _checkpoint():
@@ -550,6 +553,17 @@ def step3_resolve(dry_run: bool) -> tuple:
         written = set_bib_keys(assignments)
         if written:
             print(f"  Wrote {written} Bib key(s) into {os.path.basename(TABLE_PATH)}")
+
+    # Part C: a link on every entry. Runs on the text Parts A and B produced, so an
+    # entry that just gained its published version is checked with its new fields.
+    unlinked = entries_without_link(new_bib_text)
+    if unlinked:
+        print(f"\n  {len(unlinked)} entr{'y has' if len(unlinked) == 1 else 'ies have'} "
+              f"no DOI, arXiv ID or URL; looking one up...")
+        new_bib_text, n_linked, still_unlinked = fill_links(new_bib_text, attempts)
+        save_attempts(attempts)
+        print(f"  {n_linked}/{len(unlinked)} gained a link"
+              + (f"; {len(still_unlinked)} left for WORKLIST.md" if still_unlinked else ""))
 
     # Only write when something actually changed. Completion is recorded in
     # .pipeline_state.json, so there is no longer any reason to rewrite an

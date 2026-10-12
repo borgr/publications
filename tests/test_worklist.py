@@ -177,11 +177,22 @@ def test_two_rows_titled_identically_are_reported_with_both_keys(wl, monkeypatch
 
 
 def test_a_duplicate_bibtex_key_is_reported(wl, monkeypatch):
+    # Both entries carry a url, so the only thing wrong with them is the key.
     (wl / "orig.bib").write_text(
-        "@misc{dup, title={A}}\n@misc{dup, title={B}}\n")
+        "@misc{dup, title={A}, url={https://a}}\n@misc{dup, title={B}, url={https://b}}\n")
     section = only(worklist.gather()[0])
     assert "Duplicate BibTeX keys" in section.title
     assert "`dup` appears 2 times" in section.lines[0]
+
+
+# --- entries with no link -------------------------------------------------
+
+def test_an_entry_with_no_link_is_listed_with_its_attempt_count(wl, monkeypatch):
+    (wl / "orig.bib").write_text("@misc{p1, title={A Paper}, year={2025}}\n")
+    monkeypatch.setattr(worklist, "load_attempts", lambda *a, **k: {"link:p1": 3})
+    section = only(worklist.gather()[0])
+    assert "no DOI, arXiv ID or URL" in section.title
+    assert "`p1`" in section.lines[0] and "3 failed lookup(s)" in section.lines[0]
 
 
 # --- papers with no entry ----------------------------------------------

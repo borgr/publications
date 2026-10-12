@@ -18,6 +18,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import link_fill
 import resolve_arxiv
 import update
 from identity import IdentityStore
@@ -467,6 +468,9 @@ def step3(tmp_path, monkeypatch):
     # a source before `resolve` is patched out. Its own tests are in
     # test_resolve_sources.py; here it must only not reach the network.
     monkeypatch.setattr(update, "prefetch_s2_by_arxiv", lambda ids: 0)
+    # Part C looks a link up for every entry that has none. Its own tests are in
+    # test_link_fill.py; here it finds nothing, so Parts A and B are what is tested.
+    monkeypatch.setattr(link_fill, "find_link", lambda title, year="": {})
     saved = {"attempts": [], "store": 0, "keys": {}}
     monkeypatch.setattr(update, "save_attempts",
                         lambda a: saved["attempts"].append(dict(a)))

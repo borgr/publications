@@ -48,6 +48,7 @@ from identity import (
     find_duplicate_titles,
     join_citations,
 )
+from link_fill import ATTEMPT_PREFIX, entries_without_link
 from resolve_arxiv import load_attempts
 from table_io import rows_named
 from venues import Venues
@@ -261,6 +262,26 @@ def gather():
             "nothing: a lookup a source never answered is not counted, so the "
             "number means \"no source has it\" rather than \"the network was "
             "flaky\".",
+            lines, nature=EXTERNAL))
+
+    # ── entries the CV prints with a title that links nowhere ────────────────
+    # The bibliography style makes each title a link to the DOI, the arXiv page or
+    # the URL. An entry with none of the three has a title a reader cannot follow,
+    # which is how a grant office came to ask for a preprint's arXiv link.
+    unlinked = entries_without_link(bib_text)
+    if unlinked:
+        lines = []
+        for entry in sorted(unlinked, key=lambda e: -attempts.get(ATTEMPT_PREFIX + e["item_name"], 0)):
+            tried = attempts.get(ATTEMPT_PREFIX + entry["item_name"], 0)
+            suffix = f" — {tried} failed lookup(s) so far" if tried else ""
+            lines.append(f"- `{entry['item_name']}` — {entry['title'][:70]}{suffix}")
+        sections.append(Section(
+            f"Entries with no DOI, arXiv ID or URL ({len(unlinked)})",
+            "The CV links each title to its DOI, arXiv page or URL, so these print "
+            "as titles that go nowhere. Step 3 looks one up by title every run, in "
+            "Semantic Scholar and OpenAlex; what is left here is a paper neither "
+            "indexes yet. Add a `doi`, `eprint` or `url` field to its entry in "
+            "orig.bib by hand.",
             lines, nature=EXTERNAL))
 
     # ── author lists that stand in for the names they omit ───────────────────

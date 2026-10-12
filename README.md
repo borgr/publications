@@ -57,7 +57,7 @@ published last week staying cited as a preprint because step 3 never ran.
 | 1 | fetch | Scrapes the Scholar profile → `citations.csv`, `profile_stats.json`. Time-based (`--fetch-age`, default 24h). |
 | 2 | new papers | Adds anything in Scholar that is not in `papers.csv` yet. |
 | 2b | enrich | Fills blank Authors from Scholar, and resolves a venue from the paper's BibTeX entry. This is what moves a paper out of the CV's ArXiv section once it is published. |
-| 3 | resolve | Upgrades arXiv entries in `orig.bib` to their published version, and looks up rows that have no entry. |
+| 3 | resolve | Upgrades arXiv entries in `orig.bib` to their published version, and looks up rows that have no entry. Gives every entry a link (DOI, else arXiv ID, else URL) by title lookup in Semantic Scholar, OpenAlex and arXiv; the CV makes each title that link, as the ACL style does. |
 | 4 | build | `orig.bib` + `papers.csv` + `venues.yaml` → `overleaf/Wzmn.bib`. |
 | 5 | tex | Updates `\nocite{}` blocks, total citations and h-index in `overleaf/main.tex`. |
 | 6 | worklist | Regenerates `WORKLIST.md`. |
