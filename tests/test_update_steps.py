@@ -471,6 +471,10 @@ def step3(tmp_path, monkeypatch):
     # Part C looks a link up for every entry that has none. Its own tests are in
     # test_link_fill.py; here it finds nothing, so Parts A and B are what is tested.
     monkeypatch.setattr(link_fill, "find_link", lambda title, year="": {})
+    # Part D reads authors from arXiv for entries that name nobody. Its own tests
+    # are in test_credit_fill.py; here it is a no-op, so the attempt counts these
+    # tests check are Parts A and B's alone.
+    monkeypatch.setattr(update, "fill_credits", lambda text, attempts: (text, 0, []))
     saved = {"attempts": [], "store": 0, "keys": {}}
     monkeypatch.setattr(update, "save_attempts",
                         lambda a: saved["attempts"].append(dict(a)))

@@ -23,9 +23,35 @@ sys.path.insert(0, ROOT)
 
 import config
 from bib_utils import lists_author, parse_bibtex
+from credit_fill import has_credits
 from table_io import read_table
 
 BIB_PATH = os.path.join(ROOT, "orig.bib")
+
+
+def test_every_cited_entry_credits_someone():
+    """`lists_author` accepts an entry that names nobody, on the grounds that a
+    stub with no credits is someone else's report. Nothing made that report, and
+    the CV printed two of its owner's own papers with no authors. This is it."""
+    with open(BIB_PATH, encoding="utf-8") as fh:
+        entries = {e["item_name"]: e for e in parse_bibtex(fh.read())}
+
+    offenders = []
+    for _, row in read_table().iterrows():
+        key = str(row.get("Bib") or "").strip()
+        entry = entries.get(key)
+        if entry is not None and not has_credits(entry["content"]):
+            offenders.append(f"{key}\n      row: {str(row.get('Name'))[:70]}")
+
+    assert not offenders, (
+        f"{len(offenders)} cited entr(ies) in orig.bib have neither author nor editor, "
+        f"so the CV prints them with no authors. Run `python update.py` to read them "
+        f"from arXiv, or add the author field by hand:\n    " + "\n    ".join(offenders))
+
+
+def test_the_credit_check_would_catch_a_stub():
+    stub = "  title = {Something},\n  year = {2026},\n  eprint = {2609.19291},\n"
+    assert not has_credits(stub)
 
 
 def test_every_cited_entry_names_the_author():

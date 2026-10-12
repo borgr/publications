@@ -47,6 +47,7 @@ from bib_edit import (
 from bib_utils import extract_field, parse_bibtex
 from build_bib import simplify_venue
 from citations_io import read_citation_rows
+from credit_fill import entries_without_credits, fill_credits
 from identity import (
     MATCH_NORMALIZED,
     IdentityStore,
@@ -429,6 +430,8 @@ def step3_resolve(dry_run: bool) -> tuple:
             print(f"    … and {len(missing) - 20} more")
         print(f"  Would look up a link for {len(entries_without_link(bib_text))} "
               f"entr(ies) with no DOI, arXiv ID or URL")
+        print(f"  Would read authors for {len(entries_without_credits(bib_text))} "
+              f"entr(ies) that name nobody")
         return 0, 0, len(arxiv_entries), []
 
     def _checkpoint():
@@ -564,6 +567,18 @@ def step3_resolve(dry_run: bool) -> tuple:
         save_attempts(attempts)
         print(f"  {n_linked}/{len(unlinked)} gained a link"
               + (f"; {len(still_unlinked)} left for WORKLIST.md" if still_unlinked else ""))
+
+    # Part D: an author list on every entry. A stub written when an arXiv page could
+    # not be read names nobody, and Part A never revisits a preprint that is still
+    # a preprint, so without this the stub was permanent.
+    uncredited = entries_without_credits(new_bib_text)
+    if uncredited:
+        print(f"\n  {len(uncredited)} entr{'y names' if len(uncredited) == 1 else 'ies name'} "
+              f"no authors; reading them from arXiv...")
+        new_bib_text, n_credited, still_uncredited = fill_credits(new_bib_text, attempts)
+        save_attempts(attempts)
+        print(f"  {n_credited}/{len(uncredited)} gained an author list"
+              + (f"; {len(still_uncredited)} left for WORKLIST.md" if still_uncredited else ""))
 
     # Only write when something actually changed. Completion is recorded in
     # .pipeline_state.json, so there is no longer any reason to rewrite an

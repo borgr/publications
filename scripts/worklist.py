@@ -42,6 +42,8 @@ from citations_io import (
     fetched_date,
     read_citation_rows,
 )
+from credit_fill import ATTEMPT_PREFIX as CREDIT_ATTEMPT_PREFIX
+from credit_fill import entries_without_credits
 from identity import (
     MATCH_EXACT_ID,
     IdentityStore,
@@ -282,6 +284,24 @@ def gather():
             "Semantic Scholar and OpenAlex; what is left here is a paper neither "
             "indexes yet. Add a `doi`, `eprint` or `url` field to its entry in "
             "orig.bib by hand.",
+            lines, nature=EXTERNAL))
+
+    # ── entries that credit nobody ───────────────────────────────────────────
+    # A stub written when an arXiv page could not be read. Step 3 reads the
+    # authors from arXiv every run; what is left has no arXiv ID to read them by.
+    uncredited = entries_without_credits(bib_text)
+    if uncredited:
+        lines = []
+        for entry in sorted(uncredited, key=lambda e: e["item_name"]):
+            tried = attempts.get(CREDIT_ATTEMPT_PREFIX + entry["item_name"], 0)
+            suffix = f" — {tried} failed lookup(s) so far" if tried else ""
+            lines.append(f"- `{entry['item_name']}` — {entry['title'][:70]}{suffix}")
+        sections.append(Section(
+            f"Entries that name no authors ({len(uncredited)})",
+            "The CV prints these with no author list. Step 3 reads the authors "
+            "from the entry's arXiv page every run; an entry with no arXiv ID, or "
+            "whose page could not be read, needs an `author` field added to its "
+            "entry in orig.bib by hand.",
             lines, nature=EXTERNAL))
 
     # ── author lists that stand in for the names they omit ───────────────────

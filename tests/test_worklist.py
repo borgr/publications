@@ -177,9 +177,10 @@ def test_two_rows_titled_identically_are_reported_with_both_keys(wl, monkeypatch
 
 
 def test_a_duplicate_bibtex_key_is_reported(wl, monkeypatch):
-    # Both entries carry a url, so the only thing wrong with them is the key.
+    # Both entries carry an author and a url, so the only thing wrong is the key.
     (wl / "orig.bib").write_text(
-        "@misc{dup, title={A}, url={https://a}}\n@misc{dup, title={B}, url={https://b}}\n")
+        "@misc{dup, title={A}, author={X}, url={https://a}}\n"
+        "@misc{dup, title={B}, author={X}, url={https://b}}\n")
     section = only(worklist.gather()[0])
     assert "Duplicate BibTeX keys" in section.title
     assert "`dup` appears 2 times" in section.lines[0]
@@ -188,11 +189,22 @@ def test_a_duplicate_bibtex_key_is_reported(wl, monkeypatch):
 # --- entries with no link -------------------------------------------------
 
 def test_an_entry_with_no_link_is_listed_with_its_attempt_count(wl, monkeypatch):
-    (wl / "orig.bib").write_text("@misc{p1, title={A Paper}, year={2025}}\n")
+    (wl / "orig.bib").write_text("@misc{p1, title={A Paper}, author={X}, year={2025}}\n")
     monkeypatch.setattr(worklist, "load_attempts", lambda *a, **k: {"link:p1": 3})
     section = only(worklist.gather()[0])
     assert "no DOI, arXiv ID or URL" in section.title
     assert "`p1`" in section.lines[0] and "3 failed lookup(s)" in section.lines[0]
+
+
+# --- entries that credit nobody ---------------------------------------------
+
+def test_an_entry_that_names_nobody_is_listed(wl, monkeypatch):
+    (wl / "orig.bib").write_text(
+        "@misc{p1, title={A Paper}, year={2026}, eprint={2609.19291}}\n")
+    monkeypatch.setattr(worklist, "load_attempts", lambda *a, **k: {"credits:p1": 2})
+    section = only(worklist.gather()[0])
+    assert "name no authors" in section.title
+    assert "`p1`" in section.lines[0] and "2 failed lookup(s)" in section.lines[0]
 
 
 # --- papers with no entry ----------------------------------------------

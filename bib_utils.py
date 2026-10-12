@@ -378,8 +378,9 @@ def lists_author(content, full_name):
 
     `editor` counts, because proceedings volumes the author edited carry no author
     field. An entry with neither field is accepted: that is a stub with no credits
-    at all, which is `build_bib`'s missing-field problem and a different report --
-    this one is about being contradicted, not about being uninformative.
+    at all, which this check cannot judge -- it is about being contradicted, not
+    about being uninformative. Stubs are credit_fill's job (step 3, Part D), and
+    test_every_cited_entry_credits_someone fails while one is cited.
     """
     wanted = surname(full_name)
     if not wanted:
