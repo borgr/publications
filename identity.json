@@ -778,6 +778,12 @@
         "navigatingthemodernevaluationlandscapeconsiderationsinbenchmarksandframeworksforlargelanguagemodelsllms"
       ]
     },
+    "choshen2025base": {
+      "scholar_id": "8b8IhUYAAAAJ:bFI3QPDXJZMC",
+      "titles": [
+        "basemodelselectionforfinetuning"
+      ]
+    },
     "choshen2026babylm": {
       "arxiv": "2602.20092",
       "dblp": "journals/corr/abs-2602-20092",
