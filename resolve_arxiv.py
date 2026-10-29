@@ -781,9 +781,12 @@ def pick_published(bibtex_list: list[str], query_title: str = "",
                    query_year: int | None = None) -> tuple[str | None, str | None]:
     """Return (first_published, first_corr) from DBLP results.
 
-    When query_title is given, published entries that are not a version of it are
-    skipped — see `titles_agree` — which guards against DBLP returning a
-    different paper.
+    When query_title is given, entries that are not a version of it are skipped
+    — see `titles_agree` — which guards against DBLP returning a different
+    paper. That includes CoRR entries: without it the patent "Base model
+    selection for finetuning" took an unrelated preprint's CoRR record
+    ("Learning What Matters: Probabilistic Task Selection...") as its arXiv
+    version, and the CV listed someone else's paper.
 
     And whatever the titles say, an entry that does not list the author is not a
     version of the author's paper. Without that test this function accepted a 2022
@@ -794,15 +797,14 @@ def pick_published(bibtex_list: list[str], query_title: str = "",
     for bib in bibtex_list:
         if not lists_author(bib, config.AUTHOR_NAME):
             continue
+        if query_title and not titles_agree(
+                query_title, _dblp_title(bib), query_year, _bib_year(bib)):
+            continue
         if _is_corr(bib):
             if corr is None:
                 corr = bib
-        else:
-            if published is None:
-                if query_title and not titles_agree(
-                        query_title, _dblp_title(bib), query_year, _bib_year(bib)):
-                    continue
-                published = bib
+        elif published is None:
+            published = bib
     return published, corr
 
 

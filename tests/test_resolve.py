@@ -539,7 +539,7 @@ def test_a_known_arxiv_doi_is_never_looked_up(ladder):
 
 def test_dblps_corr_entry_is_used_before_the_export_api(ladder):
     """Same preprint, one fewer request -- DBLP already returned it."""
-    corr = ('@article{DBLP:journals/corr/abs-2401-00001, title = {T}, '
+    corr = ('@article{DBLP:journals/corr/abs-2401-00001, title = {' + _TITLE + '}, '
             'journal = {CoRR}, volume = {abs/2401.00001}}')
     ladder(search_dblp=lambda t: [corr],
            fetch_arxiv_bib=lambda a, k, known_title=None: pytest.fail(
@@ -547,6 +547,16 @@ def test_dblps_corr_entry_is_used_before_the_export_api(ladder):
     bib, source = resolve(_TITLE, "2401.00001", "k1", "")
     assert source == "arXiv (DBLP/CoRR)"
     assert bib.startswith("@article{k1,"), "the key must be rewritten to ours"
+
+
+def test_a_corr_entry_for_another_paper_is_not_taken():
+    """A patent row once took an unrelated preprint's CoRR record as its arXiv version."""
+    corr = ('@article{DBLP:journals/corr/abs-2507-12612, title = {Learning What Matters: '
+            'Probabilistic Task Selection via Mutual Information for Model Finetuning}, '
+            'author = {Leshem Choshen}, journal = {CoRR}, volume = {abs/2507.12612}, '
+            'year = {2025}}')
+    assert resolve_arxiv.pick_published(
+        [corr], "Base model selection for finetuning", 2025) == (None, None)
 
 
 def test_the_arxiv_fallback_is_given_the_title_it_searched_on(ladder):
