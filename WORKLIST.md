@@ -51,10 +51,11 @@ Scholar holds the preprint and the published version as separate records; their 
   - 100% (exact-id) Robustness as an Emergent Property of Task Performance
   - 100% (normalized-title) Robustness as an Emergent Property of Task Performance
 
-## CV output committed but not pushed (1)
+## CV output built but not committed (2)
 
 *recurring* — Will reappear as new papers arrive. Automating it is worthwhile.
 
-Committed in the overleaf/ submodule but not on the Overleaf remote, so the project there is behind. `git -C overleaf push origin` sends them, or re-run `python update.py`.
+These are generated and correct on disk, but Overleaf still serves the previous version — compiling there will show stale numbers. `python update.py` (without --no-push) commits and pushes them.
 
-- 6178299 chore: auto-update publications pipeline output
+- `overleaf/Wzmn.bib` has uncommitted changes
+- `overleaf/main.tex` has uncommitted changes
