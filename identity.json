@@ -673,6 +673,11 @@
       ]
     },
     "ashury2026robustness": {
+      "_conflicts": {
+        "doi": [
+          "10.18653/2026.findings-emnlp.138"
+        ]
+      },
       "arxiv": "2602.03344",
       "dblp": "journals/corr/abs-2602-03344",
       "doi": "10.48550/arXiv.2602.03344",
@@ -794,6 +799,13 @@
         "babylmturns4andgoesmultilingualcallforpapersforthe2026babylmworkshop"
       ]
     },
+    "choshen2026proceedings": {
+      "doi": "10.18653/2026.babylm-main",
+      "scholar_id": "8b8IhUYAAAAJ:i2xiXl-TujoC",
+      "titles": [
+        "proceedingsofthesecondbabylmworkshop"
+      ]
+    },
     "damani2026beyond": {
       "scholar_id": "8b8IhUYAAAAJ:p2g8aNsByqUC",
       "titles": [
@@ -801,6 +813,11 @@
       ]
     },
     "diskind2026cross": {
+      "_conflicts": {
+        "doi": [
+          "10.18653/2026.findings-emnlp.2443"
+        ]
+      },
       "arxiv": "2606.24579",
       "dblp": "journals/corr/abs-2606-24579",
       "doi": "10.48550/arXiv.2606.24579",
@@ -910,6 +927,7 @@
     },
     "habba2026growing": {
       "arxiv": "2604.12843",
+      "s2": "295303970",
       "scholar_id": "8b8IhUYAAAAJ:HE397vMXCloC",
       "titles": [
         "growingpainsextensibleandefficientllmbenchmarkingviafixedparametercalibration"
@@ -991,6 +1009,14 @@
       "scholar_id": "8b8IhUYAAAAJ:oNZyr7d5Mn4C",
       "titles": [
         "askingforwhatwasneverrequestedhorizontalandverticalproactivityinagents"
+      ]
+    },
+    "levy2026retrieval": {
+      "arxiv": "2610.29722",
+      "s2": "293857226",
+      "scholar_id": "8b8IhUYAAAAJ:e_rmSamDkqQC",
+      "titles": [
+        "retrievalaugmentedgenerationcompositionality"
       ]
     },
     "matena2021merging": {
@@ -1136,6 +1162,12 @@
       "arxiv": "2605.29512",
       "titles": [
         "mindgamesalivearenaforevaluatingsocialandstrategicreasoninginmultiagentllms"
+      ]
+    },
+    "wang2026mindgamesmulti": {
+      "scholar_id": "8b8IhUYAAAAJ:-FonjvnnhkoC",
+      "titles": [
+        "mindgamesamultiagentbenchmarkandtrajectorydatasetforevaluatingsocialandstrategicreasoninginllms"
       ]
     },
     "warstadt2023findings": {
