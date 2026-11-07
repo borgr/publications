@@ -71,6 +71,9 @@ MIN_FUZZY_CHARS = 20
 
 ID_FIELDS = ("scholar_id", "arxiv", "doi", "acl", "s2", "dblp")
 
+# Scholar IDs dedupe bound to a paper on top of its own; see merge_scholar_id.
+MERGED_SCHOLAR_IDS = "merged_scholar_ids"
+
 
 def normalize_title(title):
     """Normalize a title for comparison across sources.
@@ -160,6 +163,28 @@ class IdentityStore:
                 titles.append(norm)
         return rec
 
+    def merge_scholar_id(self, key, scholar_id):
+        """Bind another Scholar record to this paper, alongside its own.
+
+        Scholar often lists a preprint and its published version as two records
+        until the author merges them in the profile. When dedupe folds the two
+        table rows into one, both records' citations belong to the survivor -- but
+        `record` keeps one `scholar_id` per paper and files a second as a conflict,
+        which is right for a source that disagrees and wrong for a merge someone
+        decided. So a merged ID is kept apart, under its own list.
+        """
+        scholar_id = str(scholar_id or "").strip()
+        rec = self.records.setdefault(key, {})
+        if not scholar_id or scholar_id == rec.get("scholar_id"):
+            return rec
+        if not rec.get("scholar_id"):
+            rec["scholar_id"] = scholar_id
+            return rec
+        merged = rec.setdefault(MERGED_SCHOLAR_IDS, [])
+        if scholar_id not in merged:
+            merged.append(scholar_id)
+        return rec
+
     def rekey(self, old_key, new_key):
         """Move a synthetic-key record onto its real BibTeX key once assigned."""
         if old_key == new_key or old_key not in self.records:
@@ -167,8 +192,8 @@ class IdentityStore:
         merged = self.records.pop(old_key)
         target = self.records.setdefault(new_key, {})
         for field, value in merged.items():
-            if field == "titles":
-                seen = target.setdefault("titles", [])
+            if field in ("titles", MERGED_SCHOLAR_IDS):
+                seen = target.setdefault(field, [])
                 seen.extend(t for t in value if t not in seen)
             else:
                 target.setdefault(field, value)
@@ -191,6 +216,12 @@ class IdentityStore:
         `shared_identifiers()`.
         """
         out = {}
+        if field == "scholar_id":
+            # A merged ID is a decision dedupe made about two rows, so it outranks
+            # the dropped row's own record, which still carries the same ID.
+            for key in sorted(self.records):
+                for value in (self.records[key] or {}).get(MERGED_SCHOLAR_IDS, []):
+                    out.setdefault(value, key)
         for key in sorted(self.records):
             value = (self.records[key] or {}).get(field)
             if value and value not in out:
@@ -364,7 +395,11 @@ def join_citations(citation_rows, row_names, store=None):
         # Are these records all the same paper? Only then may their counts be
         # added. Two *different* papers landing on one row is a data problem, and
         # summing them would invent a number.
-        same_paper = all(
+        # Records bound to this row by Scholar ID are the same paper by decision,
+        # not by resemblance: dedupe binds a venue version that was renamed on
+        # the way (MindGames' arXiv "Live Arena" and its NeurIPS "Benchmark and
+        # Trajectory Dataset") precisely because no title check would join them.
+        same_paper = all(m[0] == MATCH_EXACT_ID for m in matches) or all(
             difflib.SequenceMatcher(
                 None, normalize_title(t), normalize_title(titles[0])
             ).ratio() >= FUZZY_REVIEW_CUTOFF

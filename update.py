@@ -574,7 +574,7 @@ def step3_resolve(dry_run: bool) -> tuple:
     uncredited = entries_without_credits(new_bib_text)
     if uncredited:
         print(f"\n  {len(uncredited)} entr{'y names' if len(uncredited) == 1 else 'ies name'} "
-              f"no authors; reading them from arXiv...")
+              f"no authors; reading them from arXiv or the DOI...")
         new_bib_text, n_credited, still_uncredited = fill_credits(new_bib_text, attempts)
         save_attempts(attempts)
         print(f"  {n_credited}/{len(uncredited)} gained an author list"

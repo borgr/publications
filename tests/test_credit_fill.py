@@ -3,6 +3,8 @@
 import os
 import sys
 
+import pytest
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -79,3 +81,81 @@ def test_authors_from_arxiv_reads_the_fetched_entry(monkeypatch):
                         lambda arxiv_id, key, title="":
                         "@misc{k,\n  title = {T},\n  author = {A and B},\n}")
     assert credit_fill.authors_from_arxiv("2609.19291", "k", "T") == "A and B"
+
+
+VOLUME = """@misc{choshen2026proceedings,
+  title = {Proceedings of the Second BabyLM Workshop},
+  year = {2026},
+  doi = {10.18653/2026.babylm-main},
+}
+"""
+
+ANTHOLOGY_VOLUME = """@proceedings{babylm-2026-main,
+    title = "Proceedings of the Second {B}aby{LM} Workshop",
+    editor = "Choshen, Leshem  and
+      Cotterell, Ryan",
+    year = "2026",
+    doi = "10.18653/2026.babylm-main.0",
+}"""
+
+
+def test_a_doi_only_volume_gains_its_editors(monkeypatch):
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "unanswered_lookups", lambda: 0)
+    seen = []
+
+    def _doi_lookup(doi, key, title, year):
+        seen.append((doi, year))
+        return {"editor": "Choshen, Leshem and Cotterell, Ryan"}
+
+    attempts = {}
+    text, filled, missing = fill_credits(
+        VOLUME, attempts, lookup=lambda *a: pytest.fail("no arXiv ID to look up"),
+        doi_lookup=_doi_lookup)
+    assert (filled, missing) == (1, [])
+    assert seen == [("10.18653/2026.babylm-main", 2026)]
+    entry = parse_bibtex(text)[0]
+    assert extract_field(entry["content"], "editor") == "Choshen, Leshem and Cotterell, Ryan"
+    assert not extract_field(entry["content"], "author")
+    assert attempts == {ATTEMPT_PREFIX + "choshen2026proceedings": 1}
+
+
+def test_an_arxiv_id_is_preferred_to_the_doi(monkeypatch):
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "unanswered_lookups", lambda: 0)
+    both = STUB.replace("year = {2026},", "year = {2026},\n  doi = {10.1/x},")
+    text, filled, _ = fill_credits(
+        both, {}, lookup=lambda *a: "A B",
+        doi_lookup=lambda *a: pytest.fail("asked the DOI despite an arXiv ID"))
+    assert filled == 1
+
+
+def test_an_acl_volume_doi_is_read_from_the_anthology_volume_entry(monkeypatch):
+    asked = []
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "fetch_acl_bib",
+                        lambda acl_id, key: asked.append(acl_id) or ANTHOLOGY_VOLUME)
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "fetch_by_doi_crossref",
+                        lambda *a: pytest.fail("Crossref names nobody for an ACL volume"))
+    got = credit_fill.credits_from_doi(
+        "10.18653/2026.babylm-main", "k", "Proceedings of the Second BabyLM Workshop", 2026)
+    assert asked == ["2026.babylm-main.0"]
+    assert set(got) == {"editor"} and got["editor"].startswith("Choshen, Leshem")
+
+
+def test_an_acl_paper_doi_keeps_its_own_id(monkeypatch):
+    asked = []
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "fetch_acl_bib",
+                        lambda acl_id, key: asked.append(acl_id) or None)
+    assert credit_fill.credits_from_doi("10.18653/v1/2023.acl-long.5", "k", "T") == {}
+    assert asked == ["v1/2023.acl-long.5"]
+
+
+def test_a_doi_answering_for_another_work_credits_nobody(monkeypatch):
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "fetch_acl_bib",
+                        lambda acl_id, key: ANTHOLOGY_VOLUME)
+    assert credit_fill.credits_from_doi(
+        "10.18653/2026.babylm-main", "k", "Something Else Entirely", 2026) == {}
+
+
+def test_a_non_acl_doi_goes_through_crossref(monkeypatch):
+    monkeypatch.setattr(credit_fill.resolve_arxiv, "fetch_by_doi_crossref",
+                        lambda doi, key, title, year: "@article{k,\n  title = {T},\n  author = {X Y},\n}")
+    assert credit_fill.credits_from_doi("10.1145/1", "k", "T") == {"author": "X Y"}

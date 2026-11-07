@@ -273,7 +273,8 @@ def test_citation_effect_is_silent_with_no_citations_file(sandbox):
     """A fork has no citations.csv until its first fetch, and dedupe still has to
     run: there is no citation to lose, so there is nothing to check."""
     df = table({"Name": "Foo", "Bib": "acl2023foo"})
-    assert dedupe.citation_effect(df, {("Foo", "acl2023foo")}) == ({}, [])
+    drops = [(("Foo", "acl2023foo", True), ("Foo", "arx2023foo", True), "why")]
+    assert dedupe.citation_effect(df, drops) == ({}, [])
 
 
 def test_the_dropped_row_s_scholar_id_follows_the_merge(sandbox):
@@ -284,13 +285,44 @@ def test_the_dropped_row_s_scholar_id_follows_the_merge(sandbox):
                {"Name": "Foo Revisited!", "Bib": "arx2023foo"})
     _citations(dedupe.CITATIONS_CSV, ("Foo Revisited!", 12, "sid-42"))
     drops, _unresolved, _suspected = dedupe.plan(df, PUBLISHED + PREPRINT)
-    assert dedupe.bind_dropped_scholar_ids(df, drops) == 1
-    assert sandbox.bound["acl2023foo"]["scholar_id"] == "sid-42"
+    store = IdentityStore()
+    assert dedupe.bind_dropped_scholar_ids(df, drops, store=store) == 1
+    assert store.records["acl2023foo"]["scholar_id"] == "sid-42"
 
 
 def test_binding_is_skipped_with_no_citations_file(sandbox):
     df = table({"Name": "Foo", "Bib": "acl2023foo"})
-    assert dedupe.bind_dropped_scholar_ids(df, []) == 0
+    assert dedupe.bind_dropped_scholar_ids(df, [], store=IdentityStore()) == 0
+
+
+def test_two_scholar_records_of_one_paper_merge_without_losing_either(
+        sandbox, capsys, monkeypatch):
+    """Scholar listed a preprint and its venue version as two records, each with
+    its own ID, and the survivor already carried its own. Binding the dropped ID
+    used to be filed as a conflict, so the check before it saw the dropped
+    record's citations land nowhere and refused -- and CI stayed red on a
+    duplicate the tool was built to merge (MindGames, Nov 2026)."""
+    bib = (entry("acl2023bar", title="Bar, Revisited", booktitle="Proc. ACL",
+                 doi=DOI)
+           + entry("arx2023bar", kind="misc", title="Bar (preprint)",
+                   eprint="2301.00001", archivePrefix="arXiv", doi=DOI))
+    df = table({"Name": "Bar, Revisited", "Bib": "acl2023bar"},
+               {"Name": "Bar, A Wholly Different Spelling", "Bib": "arx2023bar"})
+    _citations(dedupe.CITATIONS_CSV,
+               ("Bar, Revisited", 7, "sid-own"),
+               ("Bar, A Wholly Different Spelling", 15, "sid-other"))
+    store = IdentityStore()
+    store.record("acl2023bar", title="Bar, Revisited", scholar_id="sid-own")
+    store.record("arx2023bar", title="Bar, A Wholly Different Spelling",
+                 scholar_id="sid-other")
+    monkeypatch.setattr(IdentityStore, "load", classmethod(lambda cls, path=None: store))
+    assert sandbox.run(df, bib) == 0
+    assert list(sandbox.written["Bib"]) == ["acl2023bar"]
+    assert "22 before, 22 after — unchanged" in capsys.readouterr().out
+    rec = sandbox.bound["acl2023bar"]
+    assert rec["scholar_id"] == "sid-own"
+    assert rec["merged_scholar_ids"] == ["sid-other"]
+    assert "_conflicts" not in rec
 
 
 # ── the reason printed for the removal ───────────────────────────────────────

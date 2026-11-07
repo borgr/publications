@@ -60,13 +60,18 @@ def keep_mask(df, dropped_rows):
             for _, row in df.iterrows()]
 
 
-def citation_effect(df, dropped_rows):
-    """What happens to citation counts if `dropped_rows` are removed.
+def citation_effect(df, drops, store=None):
+    """What happens to citation counts if the rows `drops` names are removed.
 
     Returns (carried, orphaned). A removed row may be the only title a Scholar
     record matches, in which case its citations would land nowhere -- so the
     merge is checked before it is made, rather than trusting that the survivor
     happens to match too.
+
+    The check counts the Scholar IDs the merge binds to the survivor, because
+    that binding is what carries a dropped row's citations over. Checking
+    without it refused exactly the merges it exists for: a preprint and its
+    venue version that Scholar still lists as two records.
 
     Where both rows match records, `join_citations` sums them, which is what
     Scholar itself shows once the versions are merged.
@@ -74,9 +79,10 @@ def citation_effect(df, dropped_rows):
     rows = read_citation_rows(CITATIONS_CSV)
     if not rows:
         return {}, []
-    store = IdentityStore.load()
+    store = store if store is not None else IdentityStore.load()
     before = join_citations(rows, sorted(set(df["Name"].dropna())), store=store)
-    kept = df[keep_mask(df, dropped_rows)]
+    bind_dropped_scholar_ids(df, drops, store=store, rows=rows)
+    kept = df[keep_mask(df, {(loser[0], loser[1]) for loser, _, _ in drops})]
     after = join_citations(rows, sorted(set(kept["Name"].dropna())), store=store)
 
     total_before = sum(v for v in before.matched.values() if v)
@@ -86,27 +92,27 @@ def citation_effect(df, dropped_rows):
     return {"before": total_before, "after": total_after}, orphaned
 
 
-def bind_dropped_scholar_ids(df, drops):
-    """Bind a dropped row's Scholar ID to the surviving paper's key.
+def bind_dropped_scholar_ids(df, drops, store, rows=None):
+    """Bind a dropped row's Scholar ID to the surviving paper's key, in `store`.
 
-    Makes the merge permanent: the next fetch attributes that Scholar record to
-    the survivor by identifier, so its citations follow the merge even though the
-    title it was matched on no longer exists in the table.
+    Makes the merge permanent once the store is saved: the next fetch attributes
+    that Scholar record to the survivor by identifier, so its citations follow
+    the merge even though the title it was matched on no longer exists in the
+    table. The survivor keeps its own Scholar ID; the dropped one is added beside
+    it rather than filed as a conflict.
     """
-    rows = read_citation_rows(CITATIONS_CSV)
+    rows = rows if rows is not None else read_citation_rows(CITATIONS_CSV)
     if not rows:
         return 0
-    store = IdentityStore.load()
     join = join_citations(rows, sorted(set(df["Name"].dropna())), store=store)
     bound = 0
     for (loser_name, _lk, _le), (_wn, winner_key, _we), _why in drops:
         source = join.source.get(loser_name) or {}
         scholar_id = str(source.get("scholar_id") or "").strip()
         if scholar_id and winner_key:
-            store.record(winner_key, title=loser_name, scholar_id=scholar_id)
+            store.merge_scholar_id(winner_key, scholar_id)
+            store.record(winner_key, title=loser_name)
             bound += 1
-    if bound:
-        store.save()
     return bound
 
 
@@ -305,7 +311,8 @@ def main(argv=None):
 
     dropped_rows = {(loser[0], loser[1]) for loser, _, _ in drops}
 
-    totals, orphaned = citation_effect(df, dropped_rows)
+    store = IdentityStore.load()
+    totals, orphaned = citation_effect(df, drops, store=store)
     if orphaned:
         print(f"\nREFUSING to remove: {len(orphaned)} Scholar record(s) would "
               f"lose their only matching row, and their citations with them:")
@@ -318,8 +325,10 @@ def main(argv=None):
         print(f"\nCitations: {totals['before']} before, {totals['after']} after "
               f"— {'unchanged' if totals['before'] == totals['after'] else 'CHANGED'}")
 
-    bound = bind_dropped_scholar_ids(df, drops)
+    bound = sum(1 for _, (_wn, wk, _we), _ in drops
+                if (store.records.get(wk) or {}).get("merged_scholar_ids"))
     if bound:
+        store.save()
         print(f"Bound {bound} dropped row(s)' Scholar ID to the surviving paper, "
               f"so their citations follow the merge.")
 

@@ -288,7 +288,8 @@ def gather():
 
     # ── entries that credit nobody ───────────────────────────────────────────
     # A stub written when an arXiv page could not be read. Step 3 reads the
-    # authors from arXiv every run; what is left has no arXiv ID to read them by.
+    # credits from arXiv or the DOI every run; what is left has neither to read
+    # them by, or a source that did not answer.
     uncredited = entries_without_credits(bib_text)
     if uncredited:
         lines = []
@@ -299,9 +300,9 @@ def gather():
         sections.append(Section(
             f"Entries that name no authors ({len(uncredited)})",
             "The CV prints these with no author list. Step 3 reads the authors "
-            "from the entry's arXiv page every run; an entry with no arXiv ID, or "
-            "whose page could not be read, needs an `author` field added to its "
-            "entry in orig.bib by hand.",
+            "(or a volume's editors) from the entry's arXiv page or DOI every "
+            "run; an entry with neither, or whose source could not be read, needs "
+            "an `author` field added to its entry in orig.bib by hand.",
             lines, nature=EXTERNAL))
 
     # ── author lists that stand in for the names they omit ───────────────────

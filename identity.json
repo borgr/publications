@@ -1152,10 +1152,14 @@
       "arxiv": "2605.29512",
       "dblp": "journals/corr/abs-2605-29512",
       "doi": "10.48550/arXiv.2605.29512",
+      "merged_scholar_ids": [
+        "8b8IhUYAAAAJ:-FonjvnnhkoC"
+      ],
       "s2": "288742058",
       "scholar_id": "8b8IhUYAAAAJ:Z5m8FVwuT1cC",
       "titles": [
-        "mindgamesalivearenaforevaluatingsocialandstrategicreasoninginmultiagentllms"
+        "mindgamesalivearenaforevaluatingsocialandstrategicreasoninginmultiagentllms",
+        "mindgamesamultiagentbenchmarkandtrajectorydatasetforevaluatingsocialandstrategicreasoninginllms"
       ]
     },
     "wang2026mindgameslivearenaevaluating": {

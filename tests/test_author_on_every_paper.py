@@ -46,7 +46,7 @@ def test_every_cited_entry_credits_someone():
     assert not offenders, (
         f"{len(offenders)} cited entr(ies) in orig.bib have neither author nor editor, "
         f"so the CV prints them with no authors. Run `python update.py` to read them "
-        f"from arXiv, or add the author field by hand:\n    " + "\n    ".join(offenders))
+        f"from arXiv or the DOI, or add the author field by hand:\n    " + "\n    ".join(offenders))
 
 
 def test_the_credit_check_would_catch_a_stub():
