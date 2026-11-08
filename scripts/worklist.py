@@ -399,7 +399,7 @@ def gather():
             continue
         # Workshop papers are categorised by their flag, not their venue, and
         # deliberately carry no venueinf line.
-        if row.get("Workshop-paper") == 1:
+        if build_bib.is_workshop_row(row):
             continue
         # Not a paper (a proceedings volume, a patent): its venue is irrelevant.
         if row.get("Paper") == 0:

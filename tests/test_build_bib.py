@@ -553,3 +553,19 @@ def test_every_join_anomaly_is_printed(monkeypatch, capsys, field, rows, expecte
                         lambda *a, **k: result)
     build_bib._build_name2cite([], ["Paper One"])
     assert expected in capsys.readouterr().out
+
+
+def test_a_venue_naming_a_workshop_is_a_workshop_when_the_flag_is_empty():
+    from build_bib import is_workshop_row
+    neurips_ws = pd.Series({"Venue": "NeurIPS 2025 Workshop on Evaluating the Evolving LLM Lifecycle",
+                            "Workshop-paper": float("nan")})
+    babylm = pd.Series({"Venue": "Proceedings of the Second BabyLM Workshop, 2026",
+                        "Workshop-paper": float("nan")})
+    assert is_workshop_row(neurips_ws) and is_workshop_row(babylm)
+    assert not is_workshop_row(pd.Series({"Venue": "NeurIPS 2025", "Workshop-paper": float("nan")}))
+
+
+def test_the_workshop_flag_overrides_the_venue_either_way():
+    from build_bib import is_workshop_row
+    assert is_workshop_row(pd.Series({"Venue": "SURGeLLM", "Workshop-paper": 1.0}))
+    assert not is_workshop_row(pd.Series({"Venue": "Some Workshop", "Workshop-paper": 0.0}))

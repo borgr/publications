@@ -236,6 +236,22 @@ def _build_name2cite(citation_rows, df_names, store=None):
     return result
 
 
+def is_workshop_row(row) -> bool:
+    """True when a table row is a workshop paper (or a workshop's own volume).
+
+    The `Workshop-paper` column decides when it is set, 0 included. When it is
+    empty, a venue that names a workshop is one. Reading the flag alone filed
+    "NeurIPS 2025 Workshop on Evaluating the Evolving LLM Lifecycle" as NeurIPS
+    itself -- the venue string simplifies to "neurips" -- and the CV credited a
+    workshop paper with NeurIPS' "1st of 20 in artificial intelligence
+    conferences". The BabyLM workshop's proceedings landed in drafts the same way.
+    """
+    flag = row.get("Workshop-paper")
+    if flag is not None and not pd.isna(flag):
+        return flag == 1
+    return "workshop" in str(row.get("Venue") or "").lower()
+
+
 def _categorize(venue_simple, is_arxiv, is_review, is_workshop):
     """Return the BibCategories field name for a paper, or None if unknown."""
     if is_arxiv:
@@ -289,7 +305,7 @@ def _process_entries(parsed, df, name2cite, suppressed=()):
         venue_raw = row["Venue"].item() if pd.notna(row["Venue"].item()) else ""
         venue_simple = simplify_venue(venue_raw)
         is_arxiv = "xiv" in venue_raw.lower() or "review" in venue_raw.lower()
-        is_workshop = row["Workshop-paper"].item() == 1
+        is_workshop = is_workshop_row(row.squeeze())
         is_review = row["Review, Survey and Position"].item() == 1
 
         tags = extract_tags_str(row.squeeze())
