@@ -150,6 +150,8 @@ class IdentityStore:
                 continue
             value = str(value).strip()
             existing = rec.get(field)
+            if field == "scholar_id" and value in rec.get(MERGED_SCHOLAR_IDS, []):
+                continue  # one of the paper's merged records, not a disagreement
             if existing and existing != value:
                 rec.setdefault("_conflicts", {}).setdefault(field, [])
                 if value not in rec["_conflicts"][field]:

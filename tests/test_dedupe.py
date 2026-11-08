@@ -389,3 +389,15 @@ def test_a_tie_with_neither_row_cited_is_left_to_the_ranking(monkeypatch):
     drops, _unresolved, _suspected = dedupe.plan(df, bib)
     assert len(drops) == 1
     assert "Scholar citations are bound to" not in drops[0][2]
+
+
+def test_a_merged_scholar_id_seen_again_is_not_a_conflict():
+    """After a merge the build binds whichever matched record ranks first, which
+    can be the merged one. That is the paper's own record, not a source
+    disagreeing, and reporting it put a false item on the worklist."""
+    store = IdentityStore()
+    store.record("k", title="T", scholar_id="sid-own")
+    store.merge_scholar_id("k", "sid-other")
+    store.record("k", title="T", scholar_id="sid-other")
+    assert store.conflicts() == []
+    assert store.records["k"]["scholar_id"] == "sid-own"
