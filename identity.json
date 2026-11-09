@@ -337,6 +337,7 @@
     "DBLP:journals/corr/abs-2104-02310": {
       "arxiv": "2104.02310",
       "dblp": "journals/corr/abs-2104-02310",
+      "doi": "10.48550/arXiv.2104.02310",
       "s2": "233033934",
       "scholar_id": "8b8IhUYAAAAJ:MXK_kJrjxJIC",
       "titles": [
@@ -374,6 +375,7 @@
     "DBLP:journals/corr/abs-2108-10763": {
       "arxiv": "2108.10763",
       "dblp": "journals/corr/abs-2108-10763",
+      "doi": "10.48550/arXiv.2108.10763",
       "s2": "237263579",
       "scholar_id": "8b8IhUYAAAAJ:YOwf2qJgpHMC",
       "titles": [
@@ -884,6 +886,8 @@
     },
     "gaber2026why": {
       "arxiv": "2609.19291",
+      "dblp": "journals/corr/abs-2609-19291",
+      "doi": "10.48550/arXiv.2609.19291",
       "s2": "292059375",
       "scholar_id": "8b8IhUYAAAAJ:VaXvl8Fpj5cC",
       "titles": [

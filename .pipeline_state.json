@@ -2,16 +2,16 @@
   "_comment": "Content hashes of each step's inputs and outputs as of its last successful run, used to skip work whose inputs have not changed and to notice output that was since edited away. Safe to delete: the next run redoes everything.",
   "steps": {
     "build_bib": {
-      "completed_at": "2026-11-02T08:44:43",
-      "completed_epoch": 1793601883,
+      "completed_at": "2026-11-09T09:06:33",
+      "completed_epoch": 1794207993,
       "inputs": {
         "citations.csv": "61bf041a55c2ec69",
-        "orig.bib": "ca8e99f5639e01c5",
-        "papers.csv": "895f3a9291a22132",
+        "orig.bib": "7bc65cf001d13657",
+        "papers.csv": "265c695ea5aaf3e6",
         "venues.yaml": "baf4a6442b48d9d3"
       },
       "outputs": {
-        "Wzmn.bib": "2bd2a9e5788f184f"
+        "Wzmn.bib": "8aa7314bc6d116fc"
       }
     },
     "fetch": {
@@ -23,15 +23,15 @@
       "outputs": {}
     },
     "rebuild_tex": {
-      "completed_at": "2026-11-02T08:44:43",
-      "completed_epoch": 1793601883,
+      "completed_at": "2026-11-09T09:06:33",
+      "completed_epoch": 1794207993,
       "inputs": {
-        "Wzmn.bib": "2bd2a9e5788f184f",
+        "Wzmn.bib": "8aa7314bc6d116fc",
         "config.py": "3acabb96798db34d",
         "profile_stats.json": "8d22a343add64b2f"
       },
       "outputs": {
-        "main.tex": "9516aae93894f7e6"
+        "main.tex": "8b6164ff16a3fe94"
       }
     },
     "resolve": {
