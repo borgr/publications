@@ -366,6 +366,7 @@
     "DBLP:journals/corr/abs-2106-00745": {
       "arxiv": "2106.00745",
       "dblp": "journals/corr/abs-2106-00745",
+      "doi": "10.48550/arXiv.2106.00745",
       "s2": "235293879",
       "scholar_id": "8b8IhUYAAAAJ:ULOm3_A8WrAC",
       "titles": [
@@ -767,6 +768,8 @@
     },
     "cheng2026skill": {
       "arxiv": "2608.25832",
+      "dblp": "journals/corr/abs-2608-25832",
+      "doi": "10.48550/arXiv.2608.25832",
       "s2": "291371154",
       "scholar_id": "8b8IhUYAAAAJ:MLfJN-KU85MC",
       "titles": [
@@ -799,6 +802,13 @@
       "scholar_id": "8b8IhUYAAAAJ:bnK-pcrLprsC",
       "titles": [
         "babylmturns4andgoesmultilingualcallforpapersforthe2026babylmworkshop"
+      ]
+    },
+    "choshen2026findings": {
+      "doi": "10.18653/2026.babylm-main.37",
+      "scholar_id": "8b8IhUYAAAAJ:PoWvk5oyLR8C",
+      "titles": [
+        "findingsofthefourthbabylmchallengeworkshopgoingbeyondenglish"
       ]
     },
     "choshen2026proceedings": {
@@ -851,6 +861,8 @@
     },
     "donyehiya2026user": {
       "arxiv": "2609.02859",
+      "dblp": "journals/corr/abs-2609-02859",
+      "doi": "10.48550/arXiv.2609.02859",
       "s2": "291615425",
       "scholar_id": "8b8IhUYAAAAJ:LI9QrySNdTsC",
       "titles": [
